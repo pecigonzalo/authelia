@@ -1,7 +1,17 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package commands
 
 import (
 	"errors"
+	"regexp"
+)
+
+const (
+	cliOutputFmtSuccessfulUserExportFile = "Successfully exported %d %s as %s to the '%s' file\n"
+	cliOutputFmtSuccessfulUserImportFile = "Successfully imported %d %s from the %s file '%s' into the database\n"
 )
 
 const (
@@ -27,8 +37,16 @@ Commit: %s
 Build Number: %s
 Build OS: %s
 Build Arch: %s
+Build Compiler: %s
 Build Date: %s
-Extra: %s
+Development: %t
+Extra: %s`
+
+	fmtAutheliaBuildGo = `
+Go:
+    Version: %s
+    Module Path: %s
+    Executable Path: %s
 `
 
 	cmdAutheliaBuildInfoShort = "Show the build information of Authelia"
@@ -86,6 +104,54 @@ operations which would be much harder to do manually.
 
 	cmdAutheliaStorageExample = `authelia storage --help`
 
+	cmdAutheliaStorageCacheShort = "Manage storage cache"
+
+	cmdAutheliaStorageCacheLong = `Manage storage cache.
+
+This subcommand allows management of the storage cache.`
+
+	cmdAutheliaStorageCacheExample = `authelia storage cache --help`
+
+	cmdAutheliaStorageCacheMDS3Short = "Manage WebAuthn MDS3 cache storage"
+
+	cmdAutheliaStorageCacheMDS3Long = `Manage WebAuthn MDS3 cache storage.
+
+This subcommand allows management of the WebAuthn MDS3 cache storage.`
+
+	cmdAutheliaStorageCacheMDS3Example = `authelia storage cache mds3 --help`
+
+	cmdAutheliaStorageCacheMDS3DeleteShort = "Delete WebAuthn MDS3 cache storage"
+
+	cmdAutheliaStorageCacheMDS3DeleteLong = `Delete WebAuthn MDS3 cache storage.
+
+This subcommand allows deletion of the WebAuthn MDS3 cache storage.`
+
+	cmdAutheliaStorageCacheMDS3DeleteExample = `authelia storage cache mds3 delete`
+
+	cmdAutheliaStorageCacheMDS3UpdateShort = "Update WebAuthn MDS3 cache storage"
+
+	cmdAutheliaStorageCacheMDS3UpdateLong = `Update WebAuthn MDS3 cache storage.
+
+This subcommand allows updating of the WebAuthn MDS3 cache storage.`
+
+	cmdAutheliaStorageCacheMDS3UpdateExample = `authelia storage cache mds3 update`
+
+	cmdAutheliaStorageCacheMDS3DumpShort = "Dump WebAuthn MDS3 cache storage"
+
+	cmdAutheliaStorageCacheMDS3DumpLong = `Dump WebAuthn MDS3 cache storage.
+
+This subcommand allows dumping of the WebAuthn MDS3 cache storage to a file.`
+
+	cmdAutheliaStorageCacheMDS3DumpExample = `authelia storage cache mds3 dump`
+
+	cmdAutheliaStorageCacheMDS3StatusShort = "View WebAuthn MDS3 cache storage status"
+
+	cmdAutheliaStorageCacheMDS3StatusLong = `View WebAuthn MDS3 cache storage status.
+
+This subcommand allows management of the WebAuthn MDS3 cache storage.`
+
+	cmdAutheliaStorageCacheMDS3StatusExample = `authelia storage cache mds3 status`
+
 	cmdAutheliaStorageEncryptionShort = "Manage storage encryption"
 
 	cmdAutheliaStorageEncryptionLong = `Manage storage encryption.
@@ -103,7 +169,7 @@ This is useful for validating all data that can be encrypted is intact.`
 	cmdAutheliaStorageEncryptionCheckExample = `authelia storage encryption check
 authelia storage encryption check --verbose
 authelia storage encryption check --verbose --config config.yml
-authelia storage encryption check --verbose --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage encryption check --verbose --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageEncryptionChangeKeyShort = "Changes the encryption key"
 
@@ -112,7 +178,108 @@ authelia storage encryption check --verbose --encryption-key b3453fde-ecc2-4a1f-
 This subcommand allows you to change the encryption key of an Authelia SQL database.`
 
 	cmdAutheliaStorageEncryptionChangeKeyExample = `authelia storage encryption change-key --config config.yml --new-encryption-key 0e95cb49-5804-4ad9-be82-bb04a9ddecd8
-authelia storage encryption change-key --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --new-encryption-key 0e95cb49-5804-4ad9-be82-bb04a9ddecd8 --postgres.host postgres --postgres.password autheliapw`
+authelia storage encryption change-key --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --new-encryption-key 0e95cb49-5804-4ad9-be82-bb04a9ddecd8 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
+
+	cmdAutheliaStorageEncryptionRotateShort = "Rotate storage encryption values"
+
+	cmdAutheliaStorageEncryptionRotateLong = `Rotate storage encryption values.
+
+This subcommand allows rotation of various storage encryption values.`
+
+	cmdAutheliaStorageEncryptionRotateExample = `authelia storage encryption rotate --help`
+
+	cmdAutheliaStorageEncryptionRotateHMACShort = "Rotate HMAC keys"
+
+	cmdAutheliaStorageEncryptionRotateHMACLong = `Rotate HMAC keys.
+
+This subcommand allows rotation of HMAC keys used for various purposes.`
+
+	cmdAutheliaStorageEncryptionRotateHMACExample = `authelia storage encryption rotate hmac --help`
+
+	cmdAutheliaStorageEncryptionRotateHMACOTPShort = "Rotate the OTP HMAC key"
+
+	cmdAutheliaStorageEncryptionRotateHMACOTPLong = `Rotate the OTP HMAC key.
+
+This subcommand allows rotation of the HMAC key used for recording the TOTP history. In addition it truncates the 'totp_history' table.`
+
+	cmdAutheliaStorageEncryptionRotateHMACOTPExample = `authelia storage encryption rotate hmac otp --config config.yml
+authelia storage encryption rotate hmac otp --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
+
+	cmdAutheliaStorageEncryptionRotateHMACOTCShort = "Rotate the OTC HMAC key"
+
+	cmdAutheliaStorageEncryptionRotateHMACOTCLong = `Rotate the OTC HMAC key.
+
+This subcommand allows rotation of the HMAC key used for one-time codes. In addition it truncates the 'one_time_code' table.`
+
+	cmdAutheliaStorageEncryptionRotateHMACOTCExample = `authelia storage encryption rotate hmac otc --config config.yml
+authelia storage encryption rotate hmac otc --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
+
+	cmdAutheliaStorageEncryptionRotateHMACRecoveryCodeShort = "Rotate the recovery code HMAC key"
+
+	cmdAutheliaStorageEncryptionRotateHMACRecoveryCodeLong = `Rotate the recovery code HMAC key.
+
+This subcommand allows rotation of the HMAC key used for recovery codes. In addition it truncates the 'recovery_codes' table, revoking every recovery code every user holds.`
+
+	cmdAutheliaStorageEncryptionRotateHMACRecoveryCodeExample = `authelia storage encryption rotate hmac rc --config config.yml
+authelia storage encryption rotate hmac rc --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
+	cmdAutheliaStorageEncryptionRotateHMACSessionShort = "Rotate the session HMAC key"
+
+	cmdAutheliaStorageEncryptionRotateHMACSessionLong = `Rotate the session HMAC key.
+
+This subcommand allows rotation of the HMAC key used to sign session identifiers. In addition it truncates the 'session' table.
+
+Every user is signed out by this rotation as the session cookies they hold no longer resolve to a session. Sessions held by a cache provider are not truncated by this subcommand, however they are equally unreadable after it and are discarded when they expire.`
+
+	cmdAutheliaStorageEncryptionRotateHMACSessionExample = `authelia storage encryption rotate hmac session --config config.yml
+authelia storage encryption rotate hmac session --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
+
+	cmdAutheliaStorageBansShort = "Manages user and ip bans"
+
+	cmdAutheliaStorageBansLong = `Manages user and ip bans.
+
+This subcommand allows listing, creating, and revoking user and ip bans from the regulation system.`
+
+	cmdAutheliaStorageBansExample = `authelia storage bans --help`
+
+	cmdAutheliaStorageBansUserShort = "Manages user bans"
+
+	cmdAutheliaStorageBansUserLong = `Manages user bans.
+
+This subcommand allows listing, creating, and revoking user bans from the regulation system.`
+
+	cmdAutheliaStorageBansUserExample = `authelia storage bans user --help`
+
+	cmdAutheliaStorageBansIPShort = "Manages ip bans"
+
+	cmdAutheliaStorageBansIPLong = `Manages ip bans.
+
+This subcommand allows listing, creating, and revoking ip bans from the regulation system.`
+
+	cmdAutheliaStorageBansIPExample = `authelia storage bans ip --help`
+
+	cmdAutheliaStorageBansListShort = "Lists %s bans"
+
+	cmdAutheliaStorageBansListLong = `Lists %s bans.
+
+This subcommand allows listing %s bans from the regulation system.`
+
+	cmdAutheliaStorageBansListExample = `authelia storage bans %s --help`
+
+	cmdAutheliaStorageBansAddShort = "Adds %s bans"
+
+	cmdAutheliaStorageBansAddLong = `Adds %s bans.
+
+This subcommand allows adding %s bans to the regulation system.`
+
+	cmdAutheliaStorageBansAddExample = `authelia storage bans %s add --help`
+
+	cmdAutheliaStorageBansRevokeShort = "Revokes %s bans"
+
+	cmdAutheliaStorageBansRevokeLong = `Revokes %s bans.
+
+This subcommand allows revoking %s bans in the regulation system.`
+
+	cmdAutheliaStorageBansRevokeExample = `authelia storage bans %s revoke --help`
 
 	cmdAutheliaStorageUserShort = "Manages user settings"
 
@@ -130,30 +297,32 @@ This subcommand allows performing various tasks related to the opaque identifier
 
 	cmdAutheliaStorageUserIdentifiersExample = `authelia storage user identifiers --help`
 
-	cmdAutheliaStorageUserIdentifiersExportShort = "Export the identifiers to a YAML file"
+	cmdAutheliaStorageUserIdentifiersExportShort = "Export the identifiers to a file"
 
-	cmdAutheliaStorageUserIdentifiersExportLong = `Export the identifiers to a YAML file.
+	cmdAutheliaStorageUserIdentifiersExportLong = `Export the identifiers to a file.
 
-This subcommand allows exporting the opaque identifiers for users in order to back them up.`
+This subcommand allows exporting the opaque identifiers for users in order to back them up. The format is determined by
+the extension of the file; '.toml' is written as TOML, '.json' as JSON, and anything else as YAML.`
 
 	cmdAutheliaStorageUserIdentifiersExportExample = `authelia storage user identifiers export
-authelia storage user identifiers export --file export.yaml
-authelia storage user identifiers export --file export.yaml --config config.yml
-authelia storage user identifiers export --file export.yaml --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user identifiers export --file export.yml
+authelia storage user identifiers export --file export.yml --config config.yml
+authelia storage user identifiers export --file export.yml --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
-	cmdAutheliaStorageUserIdentifiersImportShort = "Import the identifiers from a YAML file"
+	cmdAutheliaStorageUserIdentifiersImportShort = "Import the identifiers from a file"
 
-	cmdAutheliaStorageUserIdentifiersImportLong = `Import the identifiers from a YAML file.
+	cmdAutheliaStorageUserIdentifiersImportLong = `Import the identifiers from a file.
 
-This subcommand allows you to import the opaque identifiers for users from a YAML file.
+This subcommand allows you to import the opaque identifiers for users from a file. The format is determined by the
+extension of the file; '.toml' is read as TOML, '.json' as JSON, and anything else as YAML.
 
-The YAML file can either be automatically generated using the authelia storage user identifiers export command, or
+The file can either be automatically generated using the authelia storage user identifiers export command, or
 manually provided the file is in the same format.`
 
 	cmdAutheliaStorageUserIdentifiersImportExample = `authelia storage user identifiers import
-authelia storage user identifiers import authelia.export.opaque-identifiers.yaml
-authelia storage user identifiers import --config config.yml export.yaml
-authelia storage user identifiers import --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw export.yaml`
+authelia storage user identifiers import authelia.export.opaque-identifiers.yml
+authelia storage user identifiers import --config config.yml export.yml
+authelia storage user identifiers import --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw export.yml`
 
 	cmdAutheliaStorageUserIdentifiersGenerateShort = "Generate opaque identifiers in bulk"
 
@@ -165,7 +334,7 @@ This subcommand allows various options for generating the opaque identifies for 
 authelia storage user identifiers generate --users john,mary --services openid
 authelia storage user identifiers generate --users john,mary --services openid --sectors=",example.com,test.com"
 authelia storage user identifiers generate --users john,mary --services openid --sectors=",example.com,test.com" --config config.yml
-authelia storage user identifiers generate --users john,mary --services openid --sectors=",example.com,test.com" --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user identifiers generate --users john,mary --services openid --sectors=",example.com,test.com" --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageUserIdentifiersAddShort = "Add an opaque identifier for a user to the database"
 
@@ -175,66 +344,76 @@ This subcommand allows manually adding an opaque identifier for a user to the da
 
 	cmdAutheliaStorageUserIdentifiersAddExample = `authelia storage user identifiers add john --identifier f0919359-9d15-4e15-bcba-83b41620a073
 authelia storage user identifiers add john --identifier f0919359-9d15-4e15-bcba-83b41620a073 --config config.yml
-authelia storage user identifiers add john --identifier f0919359-9d15-4e15-bcba-83b41620a073 --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user identifiers add john --identifier f0919359-9d15-4e15-bcba-83b41620a073 --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
-	cmdAutheliaStorageUserWebAuthnShort = "Manage WebAuthn devices"
+	cmdAutheliaStorageUserWebAuthnShort = "Manage WebAuthn credentials"
 
-	cmdAutheliaStorageUserWebAuthnLong = `Manage WebAuthn devices.
+	cmdAutheliaStorageUserWebAuthnLong = `Manage WebAuthn credentials.
 
-This subcommand allows interacting with WebAuthn devices.`
+This subcommand allows interacting with WebAuthn credentials.`
 
 	cmdAutheliaStorageUserWebAuthnExample = `authelia storage user webauthn --help`
 
-	cmdAutheliaStorageUserWebAuthnImportShort = "Perform imports of the WebAuthn devices"
+	cmdAutheliaStorageUserWebAuthnImportShort = "Perform imports of the WebAuthn credentials"
 
-	cmdAutheliaStorageUserWebAuthnImportLong = `Perform imports of the WebAuthn devices.
+	cmdAutheliaStorageUserWebAuthnImportLong = `Perform imports of the WebAuthn credentials.
 
-This subcommand allows importing WebAuthn devices from various formats.`
+This subcommand allows importing WebAuthn credentials. The format is determined by the extension of the file; '.toml'
+is read as TOML, '.json' as JSON, and anything else as YAML.`
 
 	cmdAutheliaStorageUserWebAuthnImportExample = `authelia storage user webauthn export
-authelia storage user webauthn import --file authelia.export.webauthn.yaml
-authelia storage user webauthn import --file authelia.export.webauthn.yaml --config config.yml
-authelia storage user webauthn import --file authelia.export.webauthn.yaml --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user webauthn import --file authelia.export.webauthn.yml
+authelia storage user webauthn import --file authelia.export.webauthn.yml --config config.yml
+authelia storage user webauthn import --file authelia.export.webauthn.yml --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
-	cmdAutheliaStorageUserWebAuthnExportShort = "Perform exports of the WebAuthn devices"
+	cmdAutheliaStorageUserWebAuthnExportShort = "Perform exports of the WebAuthn credentials"
 
-	cmdAutheliaStorageUserWebAuthnExportLong = `Perform exports of the WebAuthn devices.
+	cmdAutheliaStorageUserWebAuthnExportLong = `Perform exports of the WebAuthn credentials.
 
-This subcommand allows exporting WebAuthn devices to various formats.`
+This subcommand allows exporting WebAuthn credentials to various formats. The format is determined by the extension of
+the file; '.toml' is written as TOML, '.json' as JSON, and anything else as YAML.`
 
 	cmdAutheliaStorageUserWebAuthnExportExample = `authelia storage user webauthn export
-authelia storage user webauthn export --file authelia.export.webauthn.yaml
+authelia storage user webauthn export --file authelia.export.webauthn.yml
 authelia storage user webauthn export --config config.yml
-authelia storage user webauthn export--encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user webauthn export--encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
-	cmdAutheliaStorageUserWebAuthnListShort = "List WebAuthn devices"
+	cmdAutheliaStorageUserWebAuthnListShort = "List WebAuthn credentials"
 
-	cmdAutheliaStorageUserWebAuthnListLong = `List WebAuthn devices.
+	cmdAutheliaStorageUserWebAuthnListLong = `List WebAuthn credentials.
 
-This subcommand allows listing WebAuthn devices.`
+This subcommand allows listing WebAuthn credentials.`
 
 	cmdAutheliaStorageUserWebAuthnListExample = `authelia storage user webauthn list
 authelia storage user webauthn list john
 authelia storage user webauthn list --config config.yml
 authelia storage user webauthn list john --config config.yml
-authelia storage user webauthn list --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw
-authelia storage user webauthn list john --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user webauthn list --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw
+authelia storage user webauthn list john --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
-	cmdAutheliaStorageUserWebAuthnDeleteShort = "Delete a WebAuthn device"
+	cmdAutheliaStorageUserWebAuthnVerifyShort = "Verify WebAuthn credentials"
 
-	cmdAutheliaStorageUserWebAuthnDeleteLong = `Delete a WebAuthn device.
+	cmdAutheliaStorageUserWebAuthnVerifyLong = `Verify WebAuthn credentials.
 
-This subcommand allows deleting a WebAuthn device directly from the database.`
+This subcommand allows verifying registered WebAuthn credentials.`
+
+	cmdAutheliaStorageUserWebAuthnVerifyExample = `authelia storage user webauthn verify`
+
+	cmdAutheliaStorageUserWebAuthnDeleteShort = "Delete a WebAuthn credential"
+
+	cmdAutheliaStorageUserWebAuthnDeleteLong = `Delete a WebAuthn credential.
+
+This subcommand allows deleting a WebAuthn credential directly from the database.`
 
 	cmdAutheliaStorageUserWebAuthnDeleteExample = `authelia storage user webauthn delete john --all
 authelia storage user webauthn delete john --all --config config.yml
-authelia storage user webauthn delete john --all --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw
+authelia storage user webauthn delete john --all --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw
 authelia storage user webauthn delete john --description Primary
 authelia storage user webauthn delete john --description Primary --config config.yml
-authelia storage user webauthn delete john --description Primary --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw
+authelia storage user webauthn delete john --description Primary --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw
 authelia storage user webauthn delete --kid abc123
 authelia storage user webauthn delete --kid abc123 --config config.yml
-authelia storage user webauthn delete --kid abc123 --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user webauthn delete --kid abc123 --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageUserTOTPShort = "Manage TOTP configurations"
 
@@ -266,27 +445,30 @@ This subcommand allows deleting a TOTP configuration directly from the database 
 
 	cmdAutheliaStorageUserTOTPDeleteExample = `authelia storage user totp delete john
 authelia storage user totp delete john --config config.yml
-authelia storage user totp delete john --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user totp delete john --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageUserTOTPImportShort = "Perform imports of the TOTP configurations"
 
 	cmdAutheliaStorageUserTOTPImportLong = `Perform imports of the TOTP configurations.
 
-This subcommand allows importing TOTP configurations from various formats.`
+This subcommand allows importing TOTP configurations. The format is determined by the extension of the file; '.toml'
+is read as TOML, '.json' as JSON, and anything else as YAML.`
 
-	cmdAutheliaStorageUserTOTPImportExample = `authelia storage user totp import authelia.export.totp.yaml
-authelia storage user totp import --config config.yml authelia.export.totp.yaml
-authelia storage user totp import --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw authelia.export.totp.yaml`
+	cmdAutheliaStorageUserTOTPImportExample = `authelia storage user totp import authelia.export.totp.yml
+authelia storage user totp import --config config.yml authelia.export.totp.yml
+authelia storage user totp import --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw authelia.export.totp.yml`
 
 	cmdAutheliaStorageUserTOTPExportShort = "Perform exports of the TOTP configurations"
 
 	cmdAutheliaStorageUserTOTPExportLong = `Perform exports of the TOTP configurations.
 
-This subcommand allows exporting TOTP configurations to importable YAML files, or use the subcommands to export them to other non-importable formats.`
+This subcommand allows exporting TOTP configurations to importable files, or use the subcommands to export them to other
+non-importable formats. The format is determined by the extension of the file; '.toml' is written as TOML, '.json' as
+JSON, and anything else as YAML.`
 
-	cmdAutheliaStorageUserTOTPExportExample = `authelia storage user totp export --file example.yaml
+	cmdAutheliaStorageUserTOTPExportExample = `authelia storage user totp export --file example.yml
 authelia storage user totp export --config config.yml
-authelia storage user totp export --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user totp export --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageUserTOTPExportCSVShort = "Perform exports of the TOTP configurations to a CSV"
 
@@ -296,7 +478,7 @@ This subcommand allows exporting TOTP configurations to a CSV.`
 
 	cmdAutheliaStorageUserTOTPExportCSVExample = `authelia storage user totp export csv --file users.csv
 authelia storage user totp export csv --config config.yml
-authelia storage user totp export csv --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user totp export csv --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageUserTOTPExportURIShort = "Perform exports of the TOTP configurations to URIs"
 
@@ -306,7 +488,7 @@ This subcommand allows exporting TOTP configurations to TOTP URIs.`
 
 	cmdAutheliaStorageUserTOTPExportURIExample = `authelia storage user totp export uri
 authelia storage user totp export uri --config config.yml
-authelia storage user totp export uri --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user totp export uri --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageUserTOTPExportPNGShort = "Perform exports of the TOTP configurations to QR code PNG images"
 
@@ -317,7 +499,7 @@ This subcommand allows exporting TOTP configurations to PNG images with QR codes
 	cmdAutheliaStorageUserTOTPExportPNGExample = `authelia storage user totp export png
 authelia storage user totp export png --directory example/dir
 authelia storage user totp export png --config config.yml
-authelia storage user totp export png --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage user totp export png --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageSchemaInfoShort = "Show the storage information"
 
@@ -327,7 +509,7 @@ This subcommand shows advanced information about the storage schema useful in so
 
 	cmdAutheliaStorageSchemaInfoExample = `authelia storage schema-info
 authelia storage schema-info --config config.yml
-authelia storage schema-info --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage schema-info --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageMigrateShort = "Perform or list migrations"
 
@@ -345,7 +527,7 @@ This subcommand allows users to list previous migrations.`
 
 	cmdAutheliaStorageMigrateHistoryExample = `authelia storage migrate history
 authelia storage migrate history --config config.yml
-authelia storage migrate history --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage migrate history --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageMigrateListUpShort = "List the up migrations available"
 
@@ -356,7 +538,7 @@ schema version of the database.`
 
 	cmdAutheliaStorageMigrateListUpExample = `authelia storage migrate list-up
 authelia storage migrate list-up --config config.yml
-authelia storage migrate list-up --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage migrate list-up --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageMigrateListDownShort = "List the down migrations available"
 
@@ -367,7 +549,7 @@ schema version of the database.`
 
 	cmdAutheliaStorageMigrateListDownExample = `authelia storage migrate list-down
 authelia storage migrate list-down --config config.yml
-authelia storage migrate list-down --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage migrate list-down --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageMigrateUpShort = "Perform a migration up"
 
@@ -379,7 +561,7 @@ schema version of the database. By default this will migrate up to the latest av
 	cmdAutheliaStorageMigrateUpExample = `authelia storage migrate up
 authelia storage migrate up --config config.yml
 authelia storage migrate up --target 20 --config config.yml
-authelia storage migrate up --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage migrate up --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
 	cmdAutheliaStorageMigrateDownShort = "Perform a migration down"
 
@@ -390,23 +572,44 @@ schema version of the database.`
 
 	cmdAutheliaStorageMigrateDownExample = `authelia storage migrate down --target 20
 authelia storage migrate down --target 20 --config config.yml
-authelia storage migrate down --target 20 --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.host postgres --postgres.password autheliapw`
+authelia storage migrate down --target 20 --encryption-key b3453fde-ecc2-4a1f-9422-2707ddbed495 --postgres.address tcp://postgres:5432 --postgres.password autheliapw`
 
-	cmdAutheliaValidateConfigShort = "Check a configuration against the internal configuration validation mechanisms"
+	cmdAutheliaConfigShort = "Perform config related actions"
 
-	cmdAutheliaValidateConfigLong = `Check a configuration against the internal configuration validation mechanisms.
+	cmdAutheliaConfigLong = `Perform config related actions.
+
+This subcommand contains other subcommands related to the configuration.`
+
+	cmdAutheliaConfigExample = `authelia config --help`
+
+	cmdAutheliaConfigTemplateShort = "Template a configuration file or files with enabled filters"
+
+	cmdAutheliaConfigTemplateLong = `Template a configuration file or files with enabled filters.
+
+This subcommand allows debugging the filtered YAML files with any of the available filters. It should be noted this
+command needs to be executed with the same environment variables and working path as when normally running Authelia to
+be useful.`
+
+	cmdAutheliaConfigTemplateExample = `authelia config template --config.filters=template --config=config.yml`
+
+	cmdAutheliaConfigValidateShort = "Check a configuration against the internal configuration validation mechanisms"
+
+	cmdAutheliaConfigValidateLong = `Check a configuration against the internal configuration validation mechanisms.
 
 This subcommand allows validation of the YAML and Environment configurations so that a configuration can be checked
 prior to deploying it.`
 
-	cmdAutheliaValidateConfigExample = `authelia validate-config
+	cmdAutheliaConfigValidateExample = `authelia config validate
+authelia config validate --config config.yml`
+
+	cmdAutheliaConfigValidateLegacyExample = `authelia validate-config
 authelia validate-config --config config.yml`
 
 	cmdAutheliaCryptoShort = "Perform cryptographic operations"
 
 	cmdAutheliaCryptoLong = `Perform cryptographic operations.
 
-This subcommand allows preforming cryptographic certificate, key pair, etc tasks.`
+This subcommand allows performing cryptographic certificate, key pair, etc tasks.`
 
 	cmdAutheliaCryptoExample = `authelia crypto --help`
 
@@ -424,13 +627,15 @@ authelia crypto rand --charset alphabetic
 authelia crypto rand --charset ascii
 authelia crypto rand --charset numeric
 authelia crypto rand --charset numeric-hex
-authelia crypto rand --characters 0123456789ABCDEF`
+authelia crypto rand --characters 0123456789ABCDEF
+authelia crypto rand directory/file1 directory/file2
+authelia crypto rand --file directory/file3,directory/file4`
 
 	cmdAutheliaCryptoHashShort = "Perform cryptographic hash operations"
 
 	cmdAutheliaCryptoHashLong = `Perform cryptographic hash operations.
 
-This subcommand allows preforming hashing cryptographic tasks.`
+This subcommand allows performing hashing cryptographic tasks.`
 
 	cmdAutheliaCryptoHashExample = `authelia crypto hash --help`
 
@@ -438,10 +643,10 @@ This subcommand allows preforming hashing cryptographic tasks.`
 
 	cmdAutheliaCryptoHashValidateLong = `Perform cryptographic hash validations.
 
-This subcommand allows preforming cryptographic hash validations. i.e. checking hash digests against a password.`
+This subcommand allows performing cryptographic hash validations. i.e. checking hash digests against a password.`
 
 	cmdAutheliaCryptoHashValidateExample = `authelia crypto hash validate --help
-authelia crypto hash validate '$5$rounds=500000$WFjMpdCQxIkbNl0k$M0qZaZoK8Gwdh8Cw5diHgGfe5pE0iJvxcVG3.CVnQe.' -- 'p@ssw0rd'`
+authelia crypto hash validate --password 'p@ssw0rd' -- '$5$rounds=500000$WFjMpdCQxIkbNl0k$M0qZaZoK8Gwdh8Cw5diHgGfe5pE0iJvxcVG3.CVnQe.'`
 
 	cmdAutheliaCryptoHashGenerateShort = "Generate cryptographic hash digests"
 
@@ -465,7 +670,7 @@ This subcommand allows generating cryptographic %s hash digests.`
 
 	cmdAutheliaCryptoCertificateLong = `Perform certificate cryptographic operations.
 
-This subcommand allows preforming certificate cryptographic tasks.`
+This subcommand allows performing certificate cryptographic tasks.`
 
 	cmdAutheliaCryptoCertificateExample = `authelia crypto certificate --help`
 
@@ -473,7 +678,7 @@ This subcommand allows preforming certificate cryptographic tasks.`
 
 	fmtCmdAutheliaCryptoCertificateSubLong = `Perform %s certificate cryptographic operations.
 
-This subcommand allows preforming %s certificate cryptographic tasks.`
+This subcommand allows performing %s certificate cryptographic tasks.`
 
 	fmtCmdAutheliaCryptoCertificateSubExample = `authelia crypto certificate %s --help`
 
@@ -489,17 +694,21 @@ This subcommand allows generating an %s private key and %s.`
 
 	cmdAutheliaCryptoCertificateEd25519GenerateExample = `authelia crypto certificate ed25519 request --help`
 
+	cmdAutheliaCryptoCertificateMLDSAGenerateExample = `authelia crypto certificate mldsa generate --help`
+
 	cmdAutheliaCryptoCertificateRSARequestExample = `authelia crypto certificate rsa request --help`
 
 	cmdAutheliaCryptoCertificateECDSARequestExample = `authelia crypto certificate ecdsa request --help`
 
 	cmdAutheliaCryptoCertificateEd25519RequestExample = `authelia crypto certificate ed25519 request --help`
 
+	cmdAutheliaCryptoCertificateMLDSARequestExample = `authelia crypto certificate mldsa request --help`
+
 	cmdAutheliaCryptoPairShort = "Perform key pair cryptographic operations"
 
 	cmdAutheliaCryptoPairLong = `Perform key pair cryptographic operations.
 
-This subcommand allows preforming key pair cryptographic tasks.`
+This subcommand allows performing key pair cryptographic tasks.`
 
 	cmdAutheliaCryptoPairExample = `authelia crypto pair --help`
 
@@ -507,13 +716,15 @@ This subcommand allows preforming key pair cryptographic tasks.`
 
 	cmdAutheliaCryptoPairSubLong = `Perform %s key pair cryptographic operations.
 
-This subcommand allows preforming %s key pair cryptographic tasks.`
+This subcommand allows performing %s key pair cryptographic tasks.`
 
 	cmdAutheliaCryptoPairRSAExample = `authelia crypto pair rsa --help`
 
 	cmdAutheliaCryptoPairECDSAExample = `authelia crypto pair ecdsa --help`
 
 	cmdAutheliaCryptoPairEd25519Example = `authelia crypto pair ed25519 --help`
+
+	cmdAutheliaCryptoPairMLDSAExample = `authelia crypto pair mldsa --help`
 
 	fmtCmdAutheliaCryptoPairGenerateShort = "Generate a cryptographic %s key pair"
 
@@ -526,6 +737,56 @@ This subcommand allows generating an %s key pair.`
 	cmdAutheliaCryptoPairECDSAGenerateExample = `authelia crypto pair ecdsa generate --help`
 
 	cmdAutheliaCryptoPairEd25519GenerateExample = `authelia crypto pair ed25519 generate --help`
+
+	cmdAutheliaCryptoPairMLDSAGenerateExample = `authelia crypto pair mldsa generate --help`
+
+	cmdAutheliaDebugShort = "Perform debug functions"
+
+	cmdAutheliaDebugLong = `Perform debug related functions.
+
+This subcommand contains other subcommands related to debugging.`
+
+	cmdAutheliaDebugExample = `authelia debug --help`
+
+	cmdAutheliaDebugTLSShort = "Perform a TLS debug operation"
+
+	cmdAutheliaDebugTLSLong = `Perform a TLS debug operation.
+
+This subcommand allows checking a remote server's TLS configuration and the ability to validate the certificate.`
+
+	cmdAutheliaDebugTLSExample = `authelia debug tls tcp://smtp.example.com:465`
+
+	cmdAutheliaDebugExpressionShort = "Perform a user attribute expression debug operation"
+
+	cmdAutheliaDebugExpressionLong = `Perform a user attribute expression debug operation.
+
+This subcommand allows checking a user attribute expression against a specific user.`
+
+	cmdAutheliaDebugExpressionExample = `authelia debug expression username "'abc' in groups"`
+
+	cmdAutheliaDebugOIDCShort = "Perform a OpenID Connect 1.0 debug operation"
+
+	cmdAutheliaDebugOIDCLong = `Perform a OpenID Connect 1.0 debug operation.
+
+This subcommand allows checking certain OpenID Connect 1.0 scenarios.`
+
+	cmdAutheliaDebugOIDCExample = `authelia debug oidc --help`
+
+	cmdAutheliaDebugOIDCClaimsShort = "Perform a OpenID Connect 1.0 claims hydration debug operation"
+
+	cmdAutheliaDebugOIDCClaimsLong = `Perform a OpenID Connect 1.0 claims hydration debug operation.
+
+This subcommand allows checking an OpenID Connect 1.0 claims hydration scenario by providing certain information about a request.`
+
+	cmdAutheliaDebugOIDCClaimsExample = `authelia debug oidc claims --help`
+
+	cmdAutheliaDebugNotificationShort = "Perform a notifier debug operation"
+
+	cmdAutheliaDebugNotificationLong = `Perform a notifier debug operation.
+
+This subcommand loads the Authelia configuration, runs the notifier startup check, and dispatches a single test notification. It is useful for verifying that the SMTP server, filesystem path, or named-pipe consumer is reachable.`
+
+	cmdAutheliaDebugNotificationExample = `authelia debug notification --recipient admin@example.com --subject "Test"`
 )
 
 const (
@@ -534,11 +795,14 @@ const (
 )
 
 const (
-	cmdFlagNameDirectory = "directory"
+	cmdFlagNameDirectory       = "directory"
+	cmdFlagNameModeDirectories = "mode-dirs"
 
 	cmdFlagNamePathCA  = "path.ca"
 	cmdFlagNameBundles = "bundles"
+	cmdFlagNameLegacy  = "legacy"
 
+	cmdFlagNameFileExtensionLegacy    = "file.extension.legacy"
 	cmdFlagNameFilePrivateKey         = "file.private-key"
 	cmdFlagNameFilePublicKey          = "file.public-key"
 	cmdFlagNameFileCertificate        = "file.certificate"
@@ -566,9 +830,9 @@ const (
 	cmdFlagNameNotAfter  = "not-after"
 	cmdFlagNameDuration  = "duration"
 
-	cmdFlagNamePKCS8 = "pkcs8"
-	cmdFlagNameBits  = "bits"
-	cmdFlagNameCurve = "curve"
+	cmdFlagNameBits       = "bits"
+	cmdFlagNameCurve      = "curve"
+	cmdFlagNameParameters = "parameters"
 
 	cmdFlagNamePassword         = "password"
 	cmdFlagNameRandom           = "random"
@@ -592,8 +856,17 @@ const (
 	cmdFlagNameConfig    = "config"
 	cmdFlagEnvNameConfig = "X_AUTHELIA_CONFIG"
 
-	cmdFlagNameConfigExpFilters = "config.experimental.filters"
-	cmdFlagEnvNameConfigFilters = "X_AUTHELIA_CONFIG_FILTERS"
+	cmdFlagNameConfigFilters          = "config.filters"
+	cmdFlagNameConfigExpFilters       = "config.experimental.filters"
+	cmdFlagNameConfigFiltersValues    = "config.filters.values"
+	cmdFlagEnvNameConfigFilters       = "X_AUTHELIA_CONFIG_FILTERS"
+	cmdFlagEnvNameConfigFiltersValues = "X_AUTHELIA_CONFIG_FILTERS_VALUES"
+
+	cmdFlagNameConfigFiltersTemplateDelimiterLeft    = "config.filters.template.delimiter.left"
+	cmdFlagEnvNameConfigFiltersTemplateLeftDelimiter = "X_AUTHELIA_CONFIG_FILTERS_TEMPLATE_DELIMITER_LEFT"
+
+	cmdFlagNameConfigFiltersTemplateDelimiterRight    = "config.filters.template.delimiter.right"
+	cmdFlagEnvNameConfigFiltersTemplateRightDelimiter = "X_AUTHELIA_CONFIG_FILTERS_TEMPLATE_DELIMITER_RIGHT"
 
 	cmdFlagNameCharSet     = "charset"
 	cmdFlagValueCharSet    = "alphanumeric"
@@ -606,6 +879,7 @@ const (
 	cmdFlagNameNewEncryptionKey = "new-encryption-key"
 
 	cmdFlagNameFile        = "file"
+	cmdFlagNameModeFiles   = "mode-files"
 	cmdFlagNameUsers       = "users"
 	cmdFlagNameServices    = "services"
 	cmdFlagNameSectors     = "sectors"
@@ -629,13 +903,11 @@ const (
 
 	cmdFlagNameEncryptionKey      = "encryption-key"
 	cmdFlagNameSQLite3Path        = "sqlite.path"
-	cmdFlagNameMySQLHost          = "mysql.host"
-	cmdFlagNameMySQLPort          = "mysql.port"
+	cmdFlagNameMySQLAddress       = "mysql.address"
 	cmdFlagNameMySQLDatabase      = "mysql.database"
 	cmdFlagNameMySQLUsername      = "mysql.username"
 	cmdFlagNameMySQLPassword      = "mysql.password"
-	cmdFlagNamePostgreSQLHost     = "postgres.host"
-	cmdFlagNamePostgreSQLPort     = "postgres.port"
+	cmdFlagNamePostgreSQLAddress  = "postgres.address"
 	cmdFlagNamePostgreSQLDatabase = "postgres.database"
 	cmdFlagNamePostgreSQLSchema   = "postgres.schema"
 	cmdFlagNamePostgreSQLUsername = "postgres.username"
@@ -647,8 +919,8 @@ const (
 	cmdUseHashArgon2    = "argon2"
 	cmdUseHashSHA2Crypt = "sha2crypt"
 	cmdUseHashPBKDF2    = "pbkdf2"
-	cmdUseHashBCrypt    = "bcrypt"
-	cmdUseHashSCrypt    = "scrypt"
+	cmdUseHashBcrypt    = "bcrypt"
+	cmdUseHashScrypt    = "scrypt"
 
 	cmdUseExport         = "export"
 	cmdUseImportFileName = "import <filename>"
@@ -664,6 +936,9 @@ const (
 	cmdUseRSA         = "rsa"
 	cmdUseECDSA       = "ecdsa"
 	cmdUseEd25519     = "ed25519"
+	cmdUseMLDSA       = "mldsa"
+	cmdUseUser        = "user"
+	cmdUseIP          = "ip"
 )
 
 const (
@@ -671,6 +946,13 @@ const (
 	cryptoCertCSROut     = "certificate signing request"
 
 	prefixFilePassword = "authentication_backend.file.password"
+)
+
+// JSON Schema names for the export files, which must match the files published by authelia-gen.
+const (
+	jsonSchemaNameExportsTOTP        = "exports.totp"
+	jsonSchemaNameExportsWebAuthn    = "exports.webauthn"
+	jsonSchemaNameExportsIdentifiers = "exports.identifiers"
 )
 
 var (
@@ -681,6 +963,7 @@ var (
 const (
 	identifierServiceOpenIDConnect = "openid"
 	invalid                        = "invalid"
+	na                             = "N/A"
 )
 
 var (
@@ -688,29 +971,31 @@ var (
 )
 
 const (
-	helpTopicConfigFilters = `Configuration Filters are an experimental system for templating configuration files.
+	helpTopicConfigFilters = `Configuration Filters are a system for templating configuration files.
 
-Using the --config.experimental.filters flag users can define multiple filters to apply to all configuration files that
-are loaded by Authelia. These filters are applied after loading the file data from the filesystem, but before they are
-parsed by the relevant file format parser.
+To configure a list of filters use the --config.filters flag or the X_AUTHELIA_CONFIG_FILTERS environment variable.
+Multiple filters can be specified which apply to all configuration files that are loaded by Authelia. These filters are
+applied after loading the file data from the filesystem, but before they are parsed by the relevant file format parser.
 
 The filters are processed in the order specified, and the content of each configuration file is logged as a base64 raw
 string when the log level is set to trace.
 
+To make values available to the filters you can use the --config.filters.values flag or the
+X_AUTHELIA_CONFIG_FILTERS_VALUES environment variable to specify the paths of one or more values files which will be
+parsed for this purpose. The supported file extensions are '.yml', '.yaml', '.json', and '.toml'. Multiple files are
+loaded in the order specified, and the values from later files are deep-merged over the values from earlier files. The
+values files are only loaded when one of the configured filters utilizes them, otherwise they're ignored and a warning
+is logged.
+
 The following filters are available:
-
-	expand-env:
-
-		This filter expands environment variables in place where specified in the configuration. For example the string
-		${DOMAIN_NAME} will be replaced with the value from the DOMAIN_NAME environment variable or an empty string.
 
 	template:
 
 		This filter uses the go template system to filter the file. In addition to the standard functions, several
-		custom functions exist to facilitate this process. The 'env' function takes a single string does similar to the
-		'expand-env' filter for example.
+		custom functions exist to facilitate this process. This filter has access to the data from the values files via
+		the '.Values' field, and the Authelia version and build metadata via the '.Authelia' field.
 
-		For a full list of functions see: https://www.authelia.com/configuration/methods/files/#functions`
+		For a full list of functions see: https://www.authelia.com/reference/guides/templating/#functions`
 
 	helpTopicConfig = `Configuration can be specified in multiple layers where each layer is a different source from
 the last. The layers are loaded in the order below where each layer potentially overrides the individual settings from
@@ -772,17 +1057,68 @@ Layouts:
 	Ruby Date: Mon Jan 02 15:04:05 -0700 2006
 	ANSIC: Mon Jan _2 15:04:05 2006
 	Date: 2006-01-02`
+
+	//nolint:gosec // Not a credential, it's the text of a help topic.
+	helpTopicHashPassword = `The 'authelia hash-password' command has been replaced with the
+'authelia crypto hash generate' command. Run 'authelia crypto hash generate --help'
+for more information.
+
+It was replaced for a few reasons. Specifically it was confusing to users
+due to arguments which only had an effect on one algorithm and not the other,
+and the new command makes the available options a lot clearer. In addition
+the old command was not compatible with all of the available algorithms the
+new one is compatible for and retrofitting it would be incredibly difficult.`
 )
 
 const (
-	fmtLogServerListening = "Server is listening for %s connections on '%s' path '%s'"
+	fmtYAMLConfigTemplateHeader = `
+---
+##
+## Authelia rendered configuration file (file filters).
+##
+## Filters: %s
+##
+`
+
+	fmtYAMLConfigTemplateFileHeader = `
+---
+##
+## File Source Path: %s
+##
+
+`
 )
 
 const (
-	logFieldService = "service"
-	logFieldFile    = "file"
-	logFieldOP      = "op"
+	wordYes = "Yes"
+	wordNo  = "No"
+)
 
-	serviceTypeServer  = "server"
-	serviceTypeWatcher = "watcher"
+const (
+	suffixAlgorithm           = ".algorithm"
+	suffixSHA2CryptVariant    = ".sha2crypt.variant"
+	suffixSHA2CryptIterations = ".sha2crypt.iterations"
+	suffixSHA2CryptSaltLength = ".sha2crypt.salt_length"
+	suffixPBKDF2Variant       = ".pbkdf2.variant"
+	suffixPBKDF2Iterations    = ".pbkdf2.iterations"
+	suffixPBKDF2KeyLength     = ".pbkdf2.key_length"
+	suffixPBKDF2SaltLength    = ".pbkdf2.salt_length"
+	suffixBcryptVariant       = ".bcrypt.variant"
+	suffixBcryptCost          = ".bcrypt.cost"
+	suffixScryptVariant       = ".scrypt.variant"
+	suffixScryptIterations    = ".scrypt.iterations"
+	suffixScryptBlockSize     = ".scrypt.block_size"
+	suffixScryptParallelism   = ".scrypt.parallelism"
+	suffixScryptKeyLength     = ".scrypt.key_length"
+	suffixScryptSaltLength    = ".scrypt.salt_length"
+	suffixArgon2Variant       = ".argon2.variant"
+	suffixArgon2Iterations    = ".argon2.iterations"
+	suffixArgon2Memory        = ".argon2.memory"
+	suffixArgon2Parallelism   = ".argon2.parallelism"
+	suffixArgon2KeyLength     = ".argon2.key_length"
+	suffixArgon2SaltLength    = ".argon2.salt_length"
+)
+
+var (
+	reYAMLComment = regexp.MustCompile(`^---\n([.\n]*)`)
 )

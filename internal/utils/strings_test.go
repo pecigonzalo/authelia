@@ -1,12 +1,132 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package utils
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIsStringAbsURL(t *testing.T) {
+	testCases := []struct {
+		name string
+		have string
+		err  string
+	}{
+		{
+			"ShouldBeAbs",
+			"https://google.com",
+			"",
+		},
+		{
+			"ShouldNotBeAbs",
+			"google.com",
+			"could not parse 'google.com' as a URL",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			theError := IsStringAbsURL(tc.have)
+
+			if tc.err == "" {
+				assert.NoError(t, theError)
+			} else {
+				assert.EqualError(t, theError, tc.err)
+			}
+		})
+	}
+}
+
+func FuzzIsStringAbsURL(f *testing.F) {
+	f.Add("https://google.com")
+	f.Add("https://example.com")
+	f.Add("https://abc.com")
+	f.Fuzz(func(t *testing.T, s string) {
+		assert.NoError(t, IsStringAbsURL(s))
+	})
+}
+
+func TestIsStringInSliceF(t *testing.T) {
+	testCases := []struct {
+		name     string
+		needle   string
+		haystack []string
+		isEqual  func(needle, item string) bool
+		expected bool
+	}{
+		{
+			"ShouldBePresent",
+			"good",
+			[]string{"good"},
+			func(needle, item string) bool {
+				return needle == item
+			},
+			true,
+		},
+		{
+			"ShouldNotBePresent",
+			"bad",
+			[]string{"good"},
+			func(needle, item string) bool {
+				return needle == item
+			},
+			false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, IsStringInSliceF(tc.needle, tc.haystack, tc.isEqual))
+		})
+	}
+}
+
+func FuzzIsStringInSliceF(f *testing.F) {
+	a := func(needle, item string) bool {
+		return needle == item
+	}
+
+	f.Add("abc", "abc,123,456")
+	f.Add("abc", "123,abc,456")
+	f.Add("456", "123,abc,456")
+	f.Fuzz(func(t *testing.T, n, h string) {
+		haystack := strings.Split(h, ",")
+		assert.True(t, IsStringInSliceF(n, haystack, a))
+		assert.True(t, IsStringInSliceF(n, haystack, strings.EqualFold))
+	})
+}
+
+func TestStringHTMLEscape(t *testing.T) {
+	testCases := []struct {
+		name     string
+		have     string
+		expected string
+	}{
+		{
+			"ShouldNotAlterAlphaNum",
+			"abc123",
+			"abc123",
+		},
+		{
+			"ShouldEscapeSpecial",
+			"abc123><@#@",
+			"abc123&gt;&lt;@#@",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, StringHTMLEscape(tc.have))
+		})
+	}
+}
 
 func TestStringSplitDelimitedEscaped(t *testing.T) {
 	testCases := []struct {
@@ -178,17 +298,6 @@ func TestShouldNotFindStringInSliceFold(t *testing.T) {
 	assert.False(t, IsStringInSliceFold(b, slice))
 }
 
-func TestIsStringInSliceSuffix(t *testing.T) {
-	suffixes := []string{"apple", "banana"}
-
-	assert.True(t, IsStringInSliceSuffix("apple.banana", suffixes))
-	assert.True(t, IsStringInSliceSuffix("a.banana", suffixes))
-	assert.True(t, IsStringInSliceSuffix("a_banana", suffixes))
-	assert.True(t, IsStringInSliceSuffix("an.apple", suffixes))
-	assert.False(t, IsStringInSliceSuffix("an.orange", suffixes))
-	assert.False(t, IsStringInSliceSuffix("an.apple.orange", suffixes))
-}
-
 func TestIsStringSliceContainsAll(t *testing.T) {
 	needles := []string{"abc", "123", "xyz"}
 	haystackOne := []string{"abc", "tvu", "123", "456", "xyz"}
@@ -221,28 +330,11 @@ func TestStringSliceURLConversionFuncs(t *testing.T) {
 	assert.Equal(t, "abc", strs[1])
 }
 
-func TestIsURLInSlice(t *testing.T) {
-	urls := URLsFromStringSlice([]string{"https://google.com", "https://example.com"})
-
-	google, err := url.ParseRequestURI("https://google.com")
-	assert.NoError(t, err)
-
-	microsoft, err := url.ParseRequestURI("https://microsoft.com")
-	assert.NoError(t, err)
-
-	example, err := url.ParseRequestURI("https://example.com")
-	assert.NoError(t, err)
-
-	assert.True(t, IsURLInSlice(*google, urls))
-	assert.False(t, IsURLInSlice(*microsoft, urls))
-	assert.True(t, IsURLInSlice(*example, urls))
-}
-
 func TestOriginFromURL(t *testing.T) {
 	google, err := url.Parse("https://google.com/abc?a=123#five")
 	assert.NoError(t, err)
 
-	origin := OriginFromURL(*google)
+	origin := OriginFromURL(google)
 	assert.Equal(t, "https://google.com", origin.String())
 }
 
@@ -252,52 +344,160 @@ func TestJoinAndCanonicalizeHeaders(t *testing.T) {
 	assert.Equal(t, []byte("X-Example-One, X-Egg-Two"), result)
 }
 
-func TestIsURLHostComponent(t *testing.T) {
+func TestBuildStringFuncsMissingTests(t *testing.T) {
+	assert.Equal(t, "", StringJoinBuild(".", ":", "'", nil))
+	assert.Equal(t, "'abc', '123'", StringJoinComma("", []string{"abc", "123"}))
+}
+
+func TestStringJoinOr(t *testing.T) {
 	testCases := []struct {
-		desc, have           string
-		expectedA, expectedB bool
+		name     string
+		items    []string
+		expected string
 	}{
-		{
-			desc:      "ShouldBeFalseWithScheme",
-			have:      "https://google.com",
-			expectedA: false, expectedB: false,
-		},
-		{
-			desc:      "ShouldBeTrueForHostComponentButFalseForWithPort",
-			have:      "google.com",
-			expectedA: true, expectedB: false,
-		},
-		{
-			desc:      "ShouldBeFalseForHostComponentButTrueForWithPort",
-			have:      "google.com:8000",
-			expectedA: false, expectedB: true,
-		},
-		{
-			desc:      "ShouldBeFalseWithPath",
-			have:      "google.com:8000/path",
-			expectedA: false, expectedB: false,
-		},
-		{
-			desc:      "ShouldBeFalseWithFragment",
-			have:      "google.com:8000#test",
-			expectedA: false, expectedB: false,
-		},
-		{
-			desc:      "ShouldBeFalseWithQuery",
-			have:      "google.com:8000?test=1",
-			expectedA: false, expectedB: false,
-		},
+		{"Multiple items", []string{"apple", "banana", "cherry"}, "'apple', 'banana', or 'cherry'"},
+		{"Single item", []string{"apple"}, "'apple'"},
+		{"Empty slice", []string{}, ""},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			result := StringJoinOr(test.items)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestStringJoinAnd(t *testing.T) {
+	tests := []struct {
+		name     string
+		items    []string
+		expected string
+	}{
+		{"Multiple items", []string{"apple", "banana", "cherry"}, "'apple', 'banana', and 'cherry'"},
+		{"Single item", []string{"apple"}, "'apple'"},
+		{"Empty slice", []string{}, ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := StringJoinAnd(test.items)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestStringJoinComma(t *testing.T) {
+	tests := []struct {
+		name     string
+		word     string
+		items    []string
+		expected string
+	}{
+		{"Multiple items with 'or'", "or", []string{"apple", "banana", "cherry"}, "'apple', 'banana', or 'cherry'"},
+		{"Multiple items with 'and'", "and", []string{"apple", "banana", "cherry"}, "'apple', 'banana', and 'cherry'"},
+		{"Single item", "", []string{"apple"}, "'apple'"},
+		{"Empty slice", "", []string{}, ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := StringJoinComma(test.word, test.items)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestStringJoinBuild(t *testing.T) {
+	tests := []struct {
+		name     string
+		sep      string
+		sepFinal string
+		quote    string
+		items    []string
+		expected string
+	}{
+		{"Multiple items with comma", ",", "and", "'", []string{"apple", "banana", "cherry"}, "'apple', 'banana', and 'cherry'"},
+		{"Multiple items with semicolon", ";", "or", "\"", []string{"apple", "banana", "cherry"}, "\"apple\"; \"banana\"; or \"cherry\""},
+		{"Single item", ",", "", "'", []string{"apple"}, "'apple'"},
+		{"Empty slice", ",", "and", "'", []string{}, ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := StringJoinBuild(test.sep, test.sepFinal, test.quote, test.items)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestStringHasPrefixFold(t *testing.T) {
+	testCases := []struct {
+		Name     string
+		S        string
+		Prefix   string
+		Expected bool
+	}{
+		{"ShouldMatchExactCase", "Hello, World", "Hello", true},
+		{"ShouldMatchDifferentCase", "Hello, World", "hElLo", true},
+		{"ShouldMatchUpperCasePrefix", "hello, world", "HELLO", true},
+		{"ShouldMatchEntireString", "Hello", "HELLO", true},
+		{"ShouldMatchEmptyPrefix", "Hello", "", true},
+		{"ShouldMatchEmptyStringAndEmptyPrefix", "", "", true},
+		{"ShouldNotMatchWhenPrefixLonger", "Hi", "Hello", false},
+		{"ShouldNotMatchDifferentContent", "Hello, World", "World", false},
+		{"ShouldNotMatchEmptyStringWithPrefix", "", "Hello", false},
 	}
 
 	for _, tc := range testCases {
-		t.Run(tc.desc, func(t *testing.T) {
-			u, err := url.Parse(tc.have)
+		t.Run(tc.Name, func(t *testing.T) {
+			assert.Equal(t, tc.Expected, StringHasPrefixFold(tc.S, tc.Prefix))
+		})
+	}
+}
 
-			require.NoError(t, err)
-			require.NotNil(t, u)
+func TestStringHasSuffixFold(t *testing.T) {
+	testCases := []struct {
+		Name     string
+		S        string
+		Suffix   string
+		Expected bool
+	}{
+		{"ShouldMatchExactCase", "Hello, World", "World", true},
+		{"ShouldMatchDifferentCase", "Hello, World", "wOrLd", true},
+		{"ShouldMatchUpperCaseSuffix", "hello, world", "WORLD", true},
+		{"ShouldMatchEntireString", "Hello", "HELLO", true},
+		{"ShouldMatchEmptySuffix", "Hello", "", true},
+		{"ShouldMatchEmptyStringAndEmptySuffix", "", "", true},
+		{"ShouldNotMatchWhenSuffixLonger", "Hi", "Hello", false},
+		{"ShouldNotMatchDifferentContent", "Hello, World", "Hello", false},
+		{"ShouldNotMatchEmptyStringWithSuffix", "", "World", false},
+	}
 
-			assert.Equal(t, tc.expectedA, IsURLHostComponent(*u))
-			assert.Equal(t, tc.expectedB, IsURLHostComponentWithPort(*u))
+	for _, tc := range testCases {
+		t.Run(tc.Name, func(t *testing.T) {
+			assert.Equal(t, tc.Expected, StringHasSuffixFold(tc.S, tc.Suffix))
+		})
+	}
+}
+
+func TestStringSplitClean(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{"ShouldSplitStandardScenario", "apple,banana,cherry", []string{"apple", "banana", "cherry"}},
+		{"ShouldSplitLeadingTrailingScenario", " apple,banana,cherry ", []string{"apple", "banana", "cherry"}},
+		{"ShouldTrimEmptyItems", "apple,,banana", []string{"apple", "banana"}},
+		{"ShouldHandleOnlyWhiteSpace", "   ", nil},
+		{"ShouldHandleEmptyString", "", nil},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := StringSplitClean(tc.input, ",")
+			assert.Equal(t, tc.expected, actual)
 		})
 	}
 }

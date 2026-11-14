@@ -1,17 +1,31 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package validator
 
 import (
+	"context"
+	"crypto/tls"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
-	"strings"
+	"time"
 
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
 	"github.com/authelia/authelia/v4/internal/utils"
 )
 
 // ValidateConfiguration and adapt the configuration read from file.
-func ValidateConfiguration(config *schema.Configuration, validator *schema.StructValidator) {
+func ValidateConfiguration(config *schema.Configuration, validator *schema.StructValidator, opts ...func(ctx *ValidateCtx)) {
 	var err error
+
+	ctx := NewValidateCtx()
+
+	for _, opt := range opts {
+		opt(ctx)
+	}
 
 	if config.CertificatesDirectory != "" {
 		var info os.FileInfo
@@ -20,16 +34,6 @@ func ValidateConfiguration(config *schema.Configuration, validator *schema.Struc
 			validator.Push(fmt.Errorf("the location 'certificates_directory' could not be inspected: %w", err))
 		} else if !info.IsDir() {
 			validator.Push(fmt.Errorf("the location 'certificates_directory' refers to '%s' is not a directory", config.CertificatesDirectory))
-		}
-	}
-
-	if config.JWTSecret == "" {
-		validator.Push(fmt.Errorf("option 'jwt_secret' is required"))
-	}
-
-	if config.DefaultRedirectionURL != "" {
-		if err = utils.IsStringAbsURL(config.DefaultRedirectionURL); err != nil {
-			validator.Push(fmt.Errorf("option 'default_redirection_url' is invalid: %s", strings.ReplaceAll(err.Error(), "like 'http://' or 'https://'", "like 'ldap://' or 'ldaps://'")))
 		}
 	}
 
@@ -43,15 +47,21 @@ func ValidateConfiguration(config *schema.Configuration, validator *schema.Struc
 
 	ValidateTOTP(config, validator)
 
-	ValidateWebauthn(config, validator)
+	ValidateWebAuthn(config, validator)
+
+	ValidateIdentityValidation(config, validator)
 
 	ValidateAuthenticationBackend(&config.AuthenticationBackend, validator)
+
+	ValidateDefinitions(config, validator)
 
 	ValidateAccessControl(config, validator)
 
 	ValidateRules(config, validator)
 
-	ValidateSession(&config.Session, validator)
+	ValidateSession(config, validator)
+
+	ValidateCache(config, validator)
 
 	ValidateRegulation(config, validator)
 
@@ -63,7 +73,7 @@ func ValidateConfiguration(config *schema.Configuration, validator *schema.Struc
 
 	ValidateNotifier(&config.Notifier, validator)
 
-	ValidateIdentityProviders(&config.IdentityProviders, validator)
+	ValidateIdentityProviders(ctx, config, validator)
 
 	ValidateNTP(config, validator)
 
@@ -78,7 +88,7 @@ func validateDefault2FAMethod(config *schema.Configuration, validator *schema.St
 	}
 
 	if !utils.IsStringInSlice(config.Default2FAMethod, validDefault2FAMethods) {
-		validator.Push(fmt.Errorf(errFmtInvalidDefault2FAMethod, config.Default2FAMethod, strings.Join(validDefault2FAMethods, "', '")))
+		validator.Push(fmt.Errorf(errFmtInvalidDefault2FAMethod, utils.StringJoinOr(validDefault2FAMethods), config.Default2FAMethod))
 
 		return
 	}
@@ -89,7 +99,7 @@ func validateDefault2FAMethod(config *schema.Configuration, validator *schema.St
 		enabledMethods = append(enabledMethods, "totp")
 	}
 
-	if !config.Webauthn.Disable {
+	if !config.WebAuthn.Disable {
 		enabledMethods = append(enabledMethods, "webauthn")
 	}
 
@@ -98,6 +108,56 @@ func validateDefault2FAMethod(config *schema.Configuration, validator *schema.St
 	}
 
 	if !utils.IsStringInSlice(config.Default2FAMethod, enabledMethods) {
-		validator.Push(fmt.Errorf(errFmtInvalidDefault2FAMethodDisabled, config.Default2FAMethod, strings.Join(enabledMethods, "', '")))
+		validator.Push(fmt.Errorf(errFmtInvalidDefault2FAMethodDisabled, utils.StringJoinOr(enabledMethods), config.Default2FAMethod))
+	}
+}
+
+// NewValidateCtx returns a new *ValidateCtx.
+func NewValidateCtx() *ValidateCtx {
+	return &ValidateCtx{
+		Context: context.Background(),
+	}
+}
+
+// ValidateCtx is the context used during configuration validation.
+type ValidateCtx struct {
+	client *http.Client
+
+	tlsconfig *tls.Config
+
+	cacheSectorIdentifierURIs map[string][]string
+
+	context.Context
+}
+
+// GetHTTPClient returns the [http.Client] used during configuration validation.
+func (ctx *ValidateCtx) GetHTTPClient() (client *http.Client) {
+	if ctx.client == nil {
+		dialer := &net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}
+
+		transport := &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           dialer.DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			TLSClientConfig:       ctx.tlsconfig,
+		}
+
+		ctx.client = &http.Client{Transport: transport}
+	}
+
+	return ctx.client
+}
+
+// WithTLSConfig returns a function which sets the [tls.Config] of a ValidateCtx.
+func WithTLSConfig(config *tls.Config) func(ctx *ValidateCtx) {
+	return func(ctx *ValidateCtx) {
+		ctx.tlsconfig, ctx.client = config, nil
 	}
 }

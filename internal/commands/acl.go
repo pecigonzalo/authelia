@@ -1,13 +1,19 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package commands
 
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
-	"net/url"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/valyala/fasthttp"
 
 	"github.com/authelia/authelia/v4/internal/authorization"
 	"github.com/authelia/authelia/v4/internal/configuration/validator"
@@ -37,7 +43,7 @@ func newAccessControlCheckCommand(ctx *CmdCtx) (cmd *cobra.Command) {
 		Long:    cmdAutheliaAccessControlCheckPolicyLong,
 		Example: cmdAutheliaAccessControlCheckPolicyExample,
 		PreRunE: ctx.ChainRunE(
-			ctx.ConfigLoadRunE,
+			ctx.HelperConfigLoadRunE,
 		),
 		RunE: ctx.AccessControlCheckRunE,
 
@@ -45,7 +51,7 @@ func newAccessControlCheckCommand(ctx *CmdCtx) (cmd *cobra.Command) {
 	}
 
 	cmd.Flags().String("url", "", "the url of the object")
-	cmd.Flags().String("method", "GET", "the HTTP method of the object")
+	cmd.Flags().String("method", fasthttp.MethodGet, "the HTTP method of the object")
 	cmd.Flags().String("username", "", "the username of the subject")
 	cmd.Flags().StringSlice("groups", nil, "the groups of the subject")
 	cmd.Flags().String("ip", "", "the ip of the subject")
@@ -54,11 +60,17 @@ func newAccessControlCheckCommand(ctx *CmdCtx) (cmd *cobra.Command) {
 	return cmd
 }
 
+// AccessControlCheckRunE is the RunE for the authelia access-control check-policy command.
 func (ctx *CmdCtx) AccessControlCheckRunE(cmd *cobra.Command, _ []string) (err error) {
+	verbose, err := cmd.Flags().GetBool("verbose")
+	if err != nil {
+		return err
+	}
+
 	validator.ValidateAccessControl(ctx.config, ctx.cconfig.validator)
 
-	if ctx.cconfig.validator.HasErrors() || ctx.cconfig.validator.HasWarnings() {
-		return errors.New("your configuration has errors")
+	if ctx.cconfig.validator.HasErrors() {
+		return errors.New("failed to execute command due to errors in the configuration")
 	}
 
 	authorizer := authorization.NewAuthorizer(ctx.config)
@@ -70,52 +82,27 @@ func (ctx *CmdCtx) AccessControlCheckRunE(cmd *cobra.Command, _ []string) (err e
 
 	results := authorizer.GetRuleMatchResults(subject, object)
 
+	return runAccessControlCheck(cmd.OutOrStdout(), object, subject, results, ctx.config.AccessControl.DefaultPolicy, verbose)
+}
+
+func runAccessControlCheck(w io.Writer, object authorization.Object, subject authorization.Subject, results []authorization.RuleMatchResult, defaultPolicy string, verbose bool) (err error) {
 	if len(results) == 0 {
-		fmt.Printf("\nThe default policy '%s' will be applied to ALL requests as no rules are configured.\n\n", ctx.config.AccessControl.DefaultPolicy)
+		_, _ = fmt.Fprintf(w, "\nThe default policy '%s' will be applied to ALL requests as no rules are configured.\n\n", defaultPolicy)
 
 		return nil
 	}
 
-	verbose, err := cmd.Flags().GetBool("verbose")
-	if err != nil {
-		return err
-	}
+	tw := tabwriter.NewWriter(w, 1, 1, 4, ' ', 0)
 
-	accessControlCheckWriteOutput(object, subject, results, ctx.config.AccessControl.DefaultPolicy, verbose)
+	accessControlCheckWriteOutput(tw, object, subject, results, defaultPolicy, verbose)
 
-	return nil
+	return tw.Flush()
 }
 
-func accessControlCheckWriteObjectSubject(object authorization.Object, subject authorization.Subject) {
-	output := strings.Builder{}
+func accessControlCheckWriteOutput(w io.Writer, object authorization.Object, subject authorization.Subject, results []authorization.RuleMatchResult, defaultPolicy string, verbose bool) {
+	accessControlCheckWriteObjectSubject(w, object, subject)
 
-	output.WriteString(fmt.Sprintf("Performing policy check for request to '%s'", object.String()))
-
-	if object.Method != "" {
-		output.WriteString(fmt.Sprintf(" method '%s'", object.Method))
-	}
-
-	if subject.Username != "" {
-		output.WriteString(fmt.Sprintf(" username '%s'", subject.Username))
-	}
-
-	if len(subject.Groups) != 0 {
-		output.WriteString(fmt.Sprintf(" groups '%s'", strings.Join(subject.Groups, ",")))
-	}
-
-	if subject.IP != nil {
-		output.WriteString(fmt.Sprintf(" from IP '%s'", subject.IP.String()))
-	}
-
-	output.WriteString(".\n")
-
-	fmt.Println(output.String())
-}
-
-func accessControlCheckWriteOutput(object authorization.Object, subject authorization.Subject, results []authorization.RuleMatchResult, defaultPolicy string, verbose bool) {
-	accessControlCheckWriteObjectSubject(object, subject)
-
-	fmt.Printf("  #\tDomain\tResource\tMethod\tNetwork\tSubject\n")
+	_, _ = fmt.Fprintln(w, "  #\tDomain\tResource\tQuery\tMethod\tNetwork\tSubject")
 
 	var (
 		appliedPos int
@@ -133,29 +120,50 @@ func accessControlCheckWriteOutput(object authorization.Object, subject authoriz
 		switch {
 		case result.IsMatch() && !result.Skipped:
 			appliedPos, applied = i+1, result
-
-			fmt.Printf("* %d\t%s\t%s\t\t%s\t%s\t%s\n", i+1, hitMissMay(result.MatchDomain), hitMissMay(result.MatchResources), hitMissMay(result.MatchMethods), hitMissMay(result.MatchNetworks), hitMissMay(result.MatchSubjects, result.MatchSubjectsExact))
+			_, _ = fmt.Fprintf(w, "* %d\t%s\t%s\t%s\t%s\t%s\t%s\n", i+1, hitMissMay(result.MatchDomain), hitMissMay(result.MatchResources), hitMissMay(result.MatchQuery), hitMissMay(result.MatchMethods), hitMissMay(result.MatchNetworks), hitMissMay(result.MatchSubjects, result.MatchSubjectsExact))
 		case result.IsPotentialMatch() && !result.Skipped:
 			if potentialPos == 0 {
 				potentialPos, potential = i+1, result
 			}
 
-			fmt.Printf("~ %d\t%s\t%s\t\t%s\t%s\t%s\n", i+1, hitMissMay(result.MatchDomain), hitMissMay(result.MatchResources), hitMissMay(result.MatchMethods), hitMissMay(result.MatchNetworks), hitMissMay(result.MatchSubjects, result.MatchSubjectsExact))
+			_, _ = fmt.Fprintf(w, "~ %d\t%s\t%s\t%s\t%s\t%s\t%s\n", i+1, hitMissMay(result.MatchDomain), hitMissMay(result.MatchResources), hitMissMay(result.MatchQuery), hitMissMay(result.MatchMethods), hitMissMay(result.MatchNetworks), hitMissMay(result.MatchSubjects, result.MatchSubjectsExact))
 		default:
-			fmt.Printf("  %d\t%s\t%s\t\t%s\t%s\t%s\n", i+1, hitMissMay(result.MatchDomain), hitMissMay(result.MatchResources), hitMissMay(result.MatchMethods), hitMissMay(result.MatchNetworks), hitMissMay(result.MatchSubjects, result.MatchSubjectsExact))
+			_, _ = fmt.Fprintf(w, "  %d\t%s\t%s\t%s\t%s\t%s\t%s\n", i+1, hitMissMay(result.MatchDomain), hitMissMay(result.MatchResources), hitMissMay(result.MatchQuery), hitMissMay(result.MatchMethods), hitMissMay(result.MatchNetworks), hitMissMay(result.MatchSubjects, result.MatchSubjectsExact))
 		}
 	}
 
 	switch {
 	case appliedPos != 0 && (potentialPos == 0 || (potentialPos > appliedPos)):
-		fmt.Printf("\nThe policy '%s' from rule #%d will be applied to this request.\n\n", applied.Rule.Policy, appliedPos)
+		_, _ = fmt.Fprintf(w, "\nThe policy '%s' from rule #%d will be applied to this request.\n\n", applied.Rule.Policy, appliedPos)
 	case potentialPos != 0 && appliedPos != 0:
-		fmt.Printf("\nThe policy '%s' from rule #%d will potentially be applied to this request. If not policy '%s' from rule #%d will be.\n\n", potential.Rule.Policy, potentialPos, applied.Rule.Policy, appliedPos)
+		_, _ = fmt.Fprintf(w, "\nThe policy '%s' from rule #%d will potentially be applied to this request. If not policy '%s' from rule #%d will be.\n\n", potential.Rule.Policy, potentialPos, applied.Rule.Policy, appliedPos)
 	case potentialPos != 0:
-		fmt.Printf("\nThe policy '%s' from rule #%d will potentially be applied to this request. Otherwise the policy '%s' from the default policy will be.\n\n", potential.Rule.Policy, potentialPos, defaultPolicy)
+		_, _ = fmt.Fprintf(w, "\nThe policy '%s' from rule #%d will potentially be applied to this request. Otherwise the policy '%s' from the default policy will be.\n\n", potential.Rule.Policy, potentialPos, defaultPolicy)
 	default:
-		fmt.Printf("\nThe policy '%s' from the default policy will be applied to this request as no rules matched the request.\n\n", defaultPolicy)
+		_, _ = fmt.Fprintf(w, "\nThe policy '%s' from the default policy will be applied to this request as no rules matched the request.\n\n", defaultPolicy)
 	}
+}
+
+func accessControlCheckWriteObjectSubject(w io.Writer, object authorization.Object, subject authorization.Subject) {
+	_, _ = fmt.Fprintf(w, "Performing policy check for request to '%s'", object.String())
+
+	if object.Method != "" {
+		_, _ = fmt.Fprintf(w, " method '%s'", object.Method)
+	}
+
+	if subject.Username != "" {
+		_, _ = fmt.Fprintf(w, " username '%s'", subject.Username)
+	}
+
+	if len(subject.Groups) != 0 {
+		_, _ = fmt.Fprintf(w, " groups '%s'", strings.Join(subject.Groups, ","))
+	}
+
+	if subject.IP != nil {
+		_, _ = fmt.Fprintf(w, " from IP '%s'", subject.IP.String())
+	}
+
+	_, _ = fmt.Fprintf(w, ".\n\n")
 }
 
 func hitMissMay(in ...bool) (out string) {
@@ -185,11 +193,6 @@ func getSubjectAndObjectFromFlags(cmd *cobra.Command) (subject authorization.Sub
 		return subject, object, err
 	}
 
-	parsedURL, err := url.ParseRequestURI(requestURL)
-	if err != nil {
-		return subject, object, err
-	}
-
 	method, err := cmd.Flags().GetString("method")
 	if err != nil {
 		return subject, object, err
@@ -212,13 +215,17 @@ func getSubjectAndObjectFromFlags(cmd *cobra.Command) (subject authorization.Sub
 
 	parsedIP := net.ParseIP(remoteIP)
 
+	var requestedObject *authorization.Object
+
+	if requestedObject, err = authorization.NewObjectMethodURL([]byte(method), []byte(requestURL)); err != nil {
+		return subject, object, err
+	}
+
 	subject = authorization.Subject{
 		Username: username,
 		Groups:   groups,
 		IP:       parsedIP,
 	}
 
-	object = authorization.NewObject(parsedURL, method)
-
-	return subject, object, nil
+	return subject, *requestedObject, nil
 }

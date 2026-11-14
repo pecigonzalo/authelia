@@ -1,9 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package storage
 
 import (
 	"crypto/x509"
 	"fmt"
-	"path"
+	"strings"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -18,46 +22,35 @@ type MySQLProvider struct {
 }
 
 // NewMySQLProvider a MySQL provider.
-func NewMySQLProvider(config *schema.Configuration, caCertPool *x509.CertPool) (provider *MySQLProvider) {
+func NewMySQLProvider(config *schema.Configuration, caCertPool *x509.CertPool) (provider *MySQLProvider, err error) {
+	var sqlProvider SQLProvider
+
+	if sqlProvider, err = NewSQLProvider(config, providerMySQL, providerMySQL, dsnMySQL(config.Storage.MySQL, caCertPool)); err != nil {
+		return nil, err
+	}
+
 	provider = &MySQLProvider{
-		SQLProvider: NewSQLProvider(config, providerMySQL, providerMySQL, dsnMySQL(config.Storage.MySQL, caCertPool)),
+		SQLProvider: sqlProvider,
 	}
 
 	// All providers have differing SELECT existing table statements.
 	provider.sqlSelectExistingTables = queryMySQLSelectExistingTables
 
-	// Specific alterations to this provider.
 	provider.sqlFmtRenameTable = queryFmtMySQLRenameTable
 
-	return provider
+	return provider, nil
 }
 
-func dsnMySQL(config *schema.MySQLStorageConfiguration, caCertPool *x509.CertPool) (dataSourceName string) {
+func dsnMySQL(config *schema.StorageMySQL, caCertPool *x509.CertPool) (dataSourceName string) {
 	dsnConfig := mysql.NewConfig()
 
-	switch {
-	case path.IsAbs(config.Host):
-		dsnConfig.Net = sqlNetworkTypeUnixSocket
-		dsnConfig.Addr = config.Host
-	case config.Port == 0:
-		dsnConfig.Net = sqlNetworkTypeTCP
-		dsnConfig.Addr = fmt.Sprintf("%s:%d", config.Host, 3306)
-	default:
-		dsnConfig.Net = sqlNetworkTypeTCP
-		dsnConfig.Addr = fmt.Sprintf("%s:%d", config.Host, config.Port)
-	}
+	dsnConfig.Net = config.Address.Network()
+	dsnConfig.Addr = config.Address.NetworkAddress()
 
 	if config.TLS != nil {
-		_ = mysql.RegisterTLSConfig("storage", utils.NewTLSConfig(config.TLS, caCertPool))
+		dsnConfig.TLSConfig = fmt.Sprintf("authelia-%s-storage", utils.Version())
 
-		dsnConfig.TLSConfig = "storage"
-	}
-
-	switch config.Port {
-	case 0:
-		dsnConfig.Addr = config.Host
-	default:
-		dsnConfig.Addr = fmt.Sprintf("%s:%d", config.Host, config.Port)
+		_ = mysql.RegisterTLSConfig(dsnConfig.TLSConfig, utils.NewTLSConfig(config.TLS, caCertPool))
 	}
 
 	dsnConfig.DBName = config.Database
@@ -66,7 +59,10 @@ func dsnMySQL(config *schema.MySQLStorageConfiguration, caCertPool *x509.CertPoo
 	dsnConfig.Timeout = config.Timeout
 	dsnConfig.MultiStatements = true
 	dsnConfig.ParseTime = true
+	dsnConfig.RejectReadOnly = true
 	dsnConfig.Loc = time.Local
+	dsnConfig.Collation = "utf8mb4_unicode_520_ci"
+	dsnConfig.ConnectionAttributes = fmt.Sprintf("program_name:authelia,program_version:%s", strings.ReplaceAll(utils.Version(), ",", ""))
 
 	return dsnConfig.FormatDSN()
 }

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package templates
 
 import (
@@ -6,13 +10,14 @@ import (
 	tt "text/template"
 )
 
-// Templates is the struct which holds all the *template.Template values.
+// Templates is the struct which holds all the *[html/template.Template] and *[text/template.Template] values.
 type Templates struct {
 	notification NotificationTemplates
 	asset        AssetTemplates
 	oidc         OpenIDConnectTemplates
 }
 
+// OpenIDConnectTemplates holds the templates used by the OpenID Connect 1.0 handlers.
 type OpenIDConnectTemplates struct {
 	formpost *th.Template
 }
@@ -31,11 +36,12 @@ type OpenAPIAssetTemplates struct {
 
 // NotificationTemplates are the templates for the notification system.
 type NotificationTemplates struct {
-	identityVerification *EmailTemplate
-	event                *EmailTemplate
+	jwtIdentityVerification *EmailTemplate
+	otcIdentityVerification *EmailTemplate
+	event                   *EmailTemplate
 }
 
-// Template covers shared implementations between the text and html template.Template.
+// Template covers shared implementations between [text/template.Template] and [html/template.Template].
 type Template interface {
 	Execute(wr io.Writer, data any) error
 	ExecuteTemplate(wr io.Writer, name string, data any) error
@@ -57,23 +63,33 @@ type EmailTemplate struct {
 // EmailEventValues are the values used for event templates.
 type EmailEventValues struct {
 	Title       string
+	BodyPrefix  string
+	BodySuffix  string
+	BodyEvent   string
 	DisplayName string
 	Details     map[string]any
 	RemoteIP    string
 }
 
-// EmailPasswordResetValues are the values used for password reset templates.
-type EmailPasswordResetValues struct {
-	Title       string
-	DisplayName string
-	RemoteIP    string
+// EmailIdentityVerificationJWTValues are the values used for the identity verification JWT templates.
+type EmailIdentityVerificationJWTValues struct {
+	Title              string
+	DisplayName        string
+	Domain             string
+	RemoteIP           string
+	LinkURL            string
+	LinkText           string
+	RevocationLinkURL  string
+	RevocationLinkText string
 }
 
-// EmailIdentityVerificationValues are the values used for the identity verification templates.
-type EmailIdentityVerificationValues struct {
-	Title       string
-	DisplayName string
-	RemoteIP    string
-	LinkURL     string
-	LinkText    string
+// EmailIdentityVerificationOTCValues are the values used for the identity verification OTC templates.
+type EmailIdentityVerificationOTCValues struct {
+	Title              string
+	DisplayName        string
+	Domain             string
+	RemoteIP           string
+	OneTimeCode        string
+	RevocationLinkURL  string
+	RevocationLinkText string
 }

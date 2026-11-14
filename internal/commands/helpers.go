@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package commands
 
 import (
@@ -12,17 +16,8 @@ import (
 	"github.com/authelia/authelia/v4/internal/storage"
 )
 
-func getStorageProvider(ctx *CmdCtx) (provider storage.Provider) {
-	switch {
-	case ctx.config.Storage.PostgreSQL != nil:
-		return storage.NewPostgreSQLProvider(ctx.config, ctx.trusted)
-	case ctx.config.Storage.MySQL != nil:
-		return storage.NewMySQLProvider(ctx.config, ctx.trusted)
-	case ctx.config.Storage.Local != nil:
-		return storage.NewSQLiteProvider(ctx.config)
-	default:
-		return nil
-	}
+func getStorageProvider(ctx *CmdCtx) (provider storage.Provider, err error) {
+	return storage.NewProvider(ctx.config, ctx.trusted)
 }
 
 func containsIdentifier(identifier model.UserOpaqueIdentifier, identifiers []model.UserOpaqueIdentifier) bool {
@@ -38,7 +33,7 @@ func containsIdentifier(identifier model.UserOpaqueIdentifier, identifiers []mod
 func storageWrapCheckSchemaErr(err error) error {
 	switch {
 	case errors.Is(err, errStorageSchemaIncompatible):
-		return fmt.Errorf("command requires the use of a compatibe schema version: %w", err)
+		return fmt.Errorf("command requires the use of a compatible schema version: %w", err)
 	case errors.Is(err, errStorageSchemaOutdated):
 		return fmt.Errorf("command requires the use of a up to date schema version: %w", err)
 	default:

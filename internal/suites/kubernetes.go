@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -11,19 +15,22 @@ import (
 )
 
 var k3dImageName = "k3d"
-var dockerCmdLine = fmt.Sprintf("docker-compose -p authelia -f internal/suites/docker-compose.yml -f internal/suites/example/compose/k3d/docker-compose.yml exec -T %s", k3dImageName)
+
+func k3dDockerCmdLine() string {
+	return fmt.Sprintf("docker compose -p %s -f internal/suites/compose.yml -f internal/suites/example/compose/k3d/compose.yml exec -T %s", composeProjectName(), k3dImageName)
+}
 
 // K3D used for running kind commands.
 type K3D struct{}
 
 func k3dCommand(cmdline string) *exec.Cmd {
-	cmd := fmt.Sprintf("%s %s", dockerCmdLine, cmdline)
+	cmd := fmt.Sprintf("%s %s", k3dDockerCmdLine(), cmdline)
 	return utils.Shell(cmd)
 }
 
 // CreateCluster create a new Kubernetes cluster.
 func (k K3D) CreateCluster() error {
-	cmd := k3dCommand("k3d cluster create --registry-config /authelia/registry.yml -v /authelia:/var/lib/rancher/k3s/server/manifests/custom -v /configmaps:/configmaps -p 8080:443")
+	cmd := k3dCommand("k3d cluster create --registry-config /authelia/registry.yml -v /authelia:/var/lib/rancher/k3s/server/manifests/custom -v /configmaps:/configmaps -v /coverage:/coverage -p 8080:443")
 	err := cmd.Run()
 
 	return err
@@ -40,8 +47,8 @@ func (k K3D) ClusterExists() (bool, error) {
 	cmd := k3dCommand("k3d cluster list")
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	output, err := cmd.Output()
 
+	output, err := cmd.Output()
 	if err != nil {
 		return false, err
 	}
@@ -69,15 +76,24 @@ func (k Kubectl) WaitPodsReady(namespace string, timeout time.Duration) error {
 		cmd := k3dCommand(fmt.Sprintf("kubectl get -n %s pods --no-headers --field-selector=status.phase!=Succeeded", namespace))
 		cmd.Stdout = nil
 		cmd.Stderr = nil
-		output, _ := cmd.Output()
+
+		output, err := cmd.Output()
+		if err != nil {
+			return false, nil
+		}
 
 		lines := strings.Split(string(output), "\n")
 
 		nonEmptyLines := make([]string, 0)
+
 		for _, line := range lines {
 			if line != "" {
 				nonEmptyLines = append(nonEmptyLines, line)
 			}
+		}
+
+		if len(nonEmptyLines) == 0 {
+			return false, nil
 		}
 
 		for _, line := range nonEmptyLines {

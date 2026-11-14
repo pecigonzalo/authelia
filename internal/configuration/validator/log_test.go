@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package validator
 
 import (
@@ -28,7 +32,7 @@ func TestShouldSetDefaultLoggingValues(t *testing.T) {
 
 func TestShouldRaiseErrorOnInvalidLoggingLevel(t *testing.T) {
 	config := &schema.Configuration{
-		Log: schema.LogConfiguration{
+		Log: schema.Log{
 			Level: "TRACE",
 		},
 	}
@@ -40,5 +44,23 @@ func TestShouldRaiseErrorOnInvalidLoggingLevel(t *testing.T) {
 	assert.Len(t, validator.Warnings(), 0)
 	require.Len(t, validator.Errors(), 1)
 
-	assert.EqualError(t, validator.Errors()[0], "log: option 'level' must be one of 'trace', 'debug', 'info', 'warn', 'error' but it is configured as 'TRACE'")
+	assert.EqualError(t, validator.Errors()[0], "log: option 'level' must be one of 'trace', 'debug', 'info', 'warn', or 'error' but it's configured as 'TRACE'")
+}
+
+func TestShouldRaiseErrorOnInvalidLoggingFormat(t *testing.T) {
+	config := &schema.Configuration{
+		Log: schema.Log{
+			Level:  "trace",
+			Format: "FORMAT",
+		},
+	}
+
+	validator := schema.NewStructValidator()
+
+	ValidateLog(config, validator)
+
+	assert.Len(t, validator.Warnings(), 0)
+	require.Len(t, validator.Errors(), 1)
+
+	assert.EqualError(t, validator.Errors()[0], "log: option 'format' must be one of 'text' or 'json' but it's configured as 'FORMAT'")
 }

@@ -1,0 +1,291 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package handlers
+
+import (
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/google/uuid"
+
+	oauthelia2 "authelia.com/provider/oauth2"
+
+	"github.com/authelia/authelia/v4/internal/authentication"
+	"github.com/authelia/authelia/v4/internal/middlewares"
+	"github.com/authelia/authelia/v4/internal/model"
+	"github.com/authelia/authelia/v4/internal/oidc"
+	"github.com/authelia/authelia/v4/internal/session"
+	"github.com/authelia/authelia/v4/internal/storage"
+)
+
+func handleOAuth2AuthorizationConsentModePreConfigured(ctx *middlewares.AutheliaCtx, issuer *url.URL, client oidc.Client,
+	userSession session.UserSession, details *authentication.UserDetailsExtended, subject uuid.UUID,
+	rw http.ResponseWriter, r *http.Request, requester oauthelia2.Requester) (consent *model.OAuth2ConsentSession, handled bool) {
+	var (
+		consentID uuid.UUID
+		err       error
+	)
+
+	bytesConsentID := ctx.QueryArgs().PeekBytes(qryArgConsentID)
+
+	switch len(bytesConsentID) {
+	case 0:
+		return handleOAuth2AuthorizationConsentModePreConfiguredWithoutID(ctx, issuer, client, userSession, details, subject, rw, r, requester)
+	default:
+		if consentID, err = uuid.ParseBytes(bytesConsentID); err != nil {
+			ctx.GetLogger().Errorf(logFmtErrConsentParseChallengeID, requester.GetID(), client.GetID(), client.GetConsentPolicy(), bytesConsentID, err)
+
+			ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oidc.ErrConsentMalformedChallengeID)
+
+			return nil, true
+		}
+
+		return handleOAuth2AuthorizationConsentModePreConfiguredWithID(ctx, issuer, client, userSession, details, subject, consentID, rw, r, requester)
+	}
+}
+
+func handleOAuth2AuthorizationConsentModePreConfiguredWithID(ctx *middlewares.AutheliaCtx, issuer *url.URL, client oidc.Client,
+	userSession session.UserSession, details *authentication.UserDetailsExtended, subject uuid.UUID, consentID uuid.UUID,
+	rw http.ResponseWriter, r *http.Request, requester oauthelia2.Requester) (consent *model.OAuth2ConsentSession, handled bool) {
+	var (
+		config *model.OAuth2ConsentPreConfig
+		err    error
+	)
+
+	if consentID == uuid.Nil {
+		ctx.GetLogger().Errorf(logFmtErrConsentZeroID, requester.GetID(), client.GetID(), client.GetConsentPolicy())
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oidc.ErrConsentCouldNotLookup)
+
+		return nil, true
+	}
+
+	if consent, err = ctx.Providers.StorageProvider.LoadOAuth2ConsentSessionByChallengeID(ctx, consentID); err != nil {
+		ctx.GetLogger().Errorf(logFmtErrConsentLookupLoadingSession, requester.GetID(), client.GetID(), client.GetConsentPolicy(), consentID, err)
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oidc.ErrConsentCouldNotLookup)
+
+		return nil, true
+	}
+
+	if consent.Subject.Valid && consent.Subject.UUID != uuid.Nil && consent.Subject.UUID != subject {
+		ctx.GetLogger().Errorf(logFmtErrConsentSessionSubjectNotAuthorized, requester.GetID(), client.GetID(), client.GetConsentPolicy(), consent.ChallengeID, userSession.Username, subject, consent.Subject.UUID)
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oidc.ErrConsentCouldNotLookup)
+
+		return nil, true
+	}
+
+	if oidc.RequesterRequiresLogin(requester, consent.RequestedAt, userSession.LastAuthenticatedTime()) {
+		handleOAuth2AuthorizationConsentPromptLoginRedirect(ctx, issuer, client, userSession, rw, r, requester, consent)
+
+		return nil, true
+	}
+
+	if !consent.CanGrant(ctx.GetClock().Now()) {
+		ctx.GetLogger().Errorf(logFmtErrConsentCantGrantPreConf, requester.GetID(), client.GetID(), client.GetConsentPolicy(), consent.ChallengeID)
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oidc.ErrConsentCouldNotPerform)
+
+		return nil, true
+	}
+
+	if err = consent.MatchesRequester(requester, ctx.Providers.OpenIDConnect.GetPushedAuthorizeRequestURIPrefix(ctx)); err != nil {
+		ctx.GetLogger().WithError(oauthelia2.ErrorToDebugRFC6749Error(err)).Errorf(logFmtErrConsentMatchError, requester.GetID(), client.GetID(), client.GetConsentPolicy())
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, err)
+
+		return nil, true
+	}
+
+	if config, err = handleOAuth2AuthorizationConsentModePreConfiguredGetPreConfig(ctx, client, subject, requester); err != nil {
+		ctx.GetLogger().Errorf(logFmtErrConsentPreConfLookup, requester.GetID(), client.GetID(), client.GetConsentPolicy(), err)
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oidc.ErrConsentCouldNotLookup)
+
+		return nil, true
+	}
+
+	if config != nil && !consent.Responded() {
+		consent.Subject = uuid.NullUUID{UUID: subject, Valid: true}
+
+		return handleOAuth2AuthorizationConsentModePreConfiguredGrant(ctx, client, config, consent, rw, requester)
+	}
+
+	if !consent.IsAuthorized() {
+		if consent.Responded() {
+			ctx.GetLogger().Errorf(logFmtErrConsentCantGrantRejected, requester.GetID(), client.GetID(), client.GetConsentPolicy(), consent.ChallengeID)
+
+			ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oauthelia2.ErrAccessDenied)
+
+			return nil, true
+		}
+
+		handleOAuth2AuthorizationConsentRedirect(ctx, issuer, consent, client, userSession, details, rw, r, requester)
+
+		return nil, true
+	}
+
+	if requester.GetRequestForm().Get(oidc.FormParameterPrompt) == oidc.PromptNone {
+		ctx.GetLogger().Errorf("Authorization Request with id '%s' on client with id '%s' could not be processed: the 'prompt' type of 'none' was requested but client is configured to require consent or pre-configured consent and the pre-configured consent was absent", requester.GetID(), client.GetID())
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oauthelia2.ErrConsentRequired)
+
+		return nil, true
+	}
+
+	return consent, false
+}
+
+func handleOAuth2AuthorizationConsentModePreConfiguredWithoutID(ctx *middlewares.AutheliaCtx, issuer *url.URL, client oidc.Client,
+	userSession session.UserSession, details *authentication.UserDetailsExtended, subject uuid.UUID,
+	rw http.ResponseWriter, r *http.Request, requester oauthelia2.Requester) (consent *model.OAuth2ConsentSession, handled bool) {
+	var (
+		config *model.OAuth2ConsentPreConfig
+		err    error
+	)
+	if config, err = handleOAuth2AuthorizationConsentModePreConfiguredGetPreConfig(ctx, client, subject, requester); err != nil {
+		ctx.GetLogger().Errorf(logFmtErrConsentPreConfLookup, requester.GetID(), client.GetID(), client.GetConsentPolicy(), err)
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oidc.ErrConsentCouldNotLookup)
+
+		return nil, true
+	}
+
+	if config == nil {
+		if requester.GetRequestForm().Get(oidc.FormParameterPrompt) == oidc.PromptNone {
+			ctx.GetLogger().Errorf("Authorization Request with id '%s' on client with id '%s' could not be processed: the 'prompt' type of 'none' was requested but client is configured to require consent or pre-configured consent and the pre-configured consent was absent", requester.GetID(), client.GetID())
+
+			ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oauthelia2.ErrConsentRequired)
+
+			return nil, true
+		}
+
+		return handleOAuth2AuthorizationConsentGenerate(ctx, issuer, client, userSession, details, uuid.Nil, rw, r, requester)
+	}
+
+	if consent, err = handleOAuth2NewConsentSession(ctx, subject, requester, ctx.Providers.OpenIDConnect.GetPushedAuthorizeRequestURIPrefix(ctx)); err != nil {
+		ctx.GetLogger().Errorf(logFmtErrConsentGenerateError, requester.GetID(), client.GetID(), client.GetConsentPolicy(), "generating", err)
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oidc.ErrConsentCouldNotGenerate)
+
+		return nil, true
+	}
+
+	if err = ctx.Providers.StorageProvider.SaveOAuth2ConsentSession(ctx, consent); err != nil {
+		ctx.GetLogger().Errorf(logFmtErrConsentSaveSession, requester.GetID(), client.GetID(), client.GetConsentPolicy(), consent.ChallengeID, err)
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oidc.ErrConsentCouldNotSave)
+
+		return nil, true
+	}
+
+	challenge := consent.ChallengeID
+
+	if consent, err = ctx.Providers.StorageProvider.LoadOAuth2ConsentSessionByChallengeID(ctx, challenge); err != nil {
+		ctx.GetLogger().Errorf(logFmtErrConsentSaveSession, requester.GetID(), client.GetID(), client.GetConsentPolicy(), challenge, err)
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oidc.ErrConsentCouldNotSave)
+
+		return nil, true
+	}
+
+	if oidc.RequesterRequiresLogin(requester, consent.RequestedAt, userSession.LastAuthenticatedTime()) {
+		handleOAuth2AuthorizationConsentPromptLoginRedirect(ctx, issuer, client, userSession, rw, r, requester, consent)
+
+		return nil, true
+	} else {
+		ctx.GetLogger().WithFields(map[string]any{"requested_at": consent.RequestedAt, "authenticated_at": userSession.LastAuthenticatedTime(), "prompt": requester.GetRequestForm().Get("prompt")}).Debugf("Authorization Request with id '%s' on client with id '%s' is not being redirected for reauthentication", requester.GetID(), client.GetID())
+	}
+
+	return handleOAuth2AuthorizationConsentModePreConfiguredGrant(ctx, client, config, consent, rw, requester)
+}
+
+func handleOAuth2AuthorizationConsentModePreConfiguredGrant(ctx *middlewares.AutheliaCtx, client oidc.Client, config *model.OAuth2ConsentPreConfig,
+	consent *model.OAuth2ConsentSession, rw http.ResponseWriter, requester oauthelia2.Requester) (*model.OAuth2ConsentSession, bool) {
+	oidc.ConsentGrant(consent, true, config.GrantedClaims)
+
+	consent.SetRespondedAt(ctx.GetClock().Now(), config.ID)
+
+	if err := ctx.Providers.StorageProvider.SaveOAuth2ConsentSessionResponse(ctx, consent, false); err != nil {
+		ctx.GetLogger().Errorf(logFmtErrConsentSaveSessionResponse, requester.GetID(), client.GetID(), client.GetConsentPolicy(), consent.ChallengeID, err)
+
+		ctx.Providers.OpenIDConnect.WriteDynamicAuthorizeError(ctx, rw, requester, oidc.ErrConsentCouldNotSave)
+
+		return nil, true
+	}
+
+	return consent, false
+}
+
+func handleOAuth2AuthorizationConsentModePreConfiguredGetPreConfig(ctx *middlewares.AutheliaCtx, client oidc.Client, subject uuid.UUID, requester oauthelia2.Requester) (config *model.OAuth2ConsentPreConfig, err error) {
+	var (
+		rows *storage.ConsentPreConfigRows
+	)
+
+	ctx.GetLogger().Debugf(logFmtDbgConsentPreConfTryingLookup, requester.GetID(), client.GetID(), client.GetConsentPolicy(), client.GetID(), subject, strings.Join(requester.GetRequestedScopes(), " "))
+
+	if rows, err = ctx.Providers.StorageProvider.LoadOAuth2ConsentPreConfigurations(ctx, client.GetID(), subject, ctx.GetClock().Now()); err != nil {
+		return nil, fmt.Errorf("error loading rows: %w", err)
+	}
+
+	defer func() {
+		if err := rows.Close(); err != nil {
+			ctx.GetLogger().Errorf(logFmtErrConsentPreConfRowsClose, requester.GetID(), client.GetID(), client.GetConsentPolicy(), err)
+		}
+	}()
+
+	var (
+		requests *oidc.ClaimsRequests
+
+		serialized, signature string
+	)
+
+	if requests, err = oidc.NewClaimRequestsFromRequester(requester); err != nil {
+		return nil, fmt.Errorf("error parsing claim requests: %w", err)
+	} else if requests != nil {
+		if serialized, signature, err = requests.Serialized(); err != nil {
+			return nil, fmt.Errorf("error serializing claim requests: %w", err)
+		}
+	}
+
+	scopes, audience, resource := requester.GetRequestedScopes(), requester.GetRequestedAudience(), requester.GetRequestedResource()
+
+	log := ctx.GetLogger().WithFields(map[string]any{"scopes": scopes, "claims": serialized, "audience": audience, "resource": resource, "client_id": client.GetID()})
+
+	for rows.Next() {
+		if config, err = rows.Get(); err != nil {
+			return nil, fmt.Errorf("error iterating rows: %w", err)
+		}
+
+		if !config.CanConsentAt(ctx.GetClock().Now()) {
+			log.Debugf("Authorization Request with id '%s' on client with id '%s' using consent mode '%s' found a matching pre-configuration with id '%d' but it is revoked, expired, or otherwise can no longer provide consent", requester.GetID(), client.GetID(), client.GetConsentPolicy(), config.ID)
+
+			continue
+		}
+
+		if !config.HasExactGrants(scopes, audience, resource) {
+			log.Debugf("Authorization Request with id '%s' on client with id '%s' using consent mode '%s' found a matching pre-configuration with id '%d' but the configuration has scopes '%s', audience '%s', and resource '%s' which does not match the request", requester.GetID(), client.GetID(), client.GetConsentPolicy(), config.ID, strings.Join(config.Scopes, " "), strings.Join(config.Audience, " "), strings.Join(config.Resource, " "))
+
+			continue
+		}
+
+		if !config.HasClaimsSignature(signature) {
+			log.Debugf("Authorization Request with id '%s' on client with id '%s' using consent mode '%s' found a matching pre-configuration with id '%d' but the configuration had the requested claims '%s' which does not match the request", requester.GetID(), client.GetID(), client.GetConsentPolicy(), config.ID, config.RequestedClaims.String)
+
+			continue
+		}
+
+		log.Debugf(logFmtDbgConsentPreConfSuccessfulLookup, requester.GetID(), client.GetID(), client.GetConsentPolicy(), client.GetID(), subject, strings.Join(requester.GetRequestedScopes(), " "), config.ID)
+
+		return config, nil
+	}
+
+	ctx.GetLogger().Debugf(logFmtDbgConsentPreConfUnsuccessfulLookup, requester.GetID(), client.GetID(), client.GetConsentPolicy(), client.GetID(), subject, strings.Join(scopes, " "), strings.Join(audience, " "), strings.Join(resource, " "))
+
+	return nil, nil
+}

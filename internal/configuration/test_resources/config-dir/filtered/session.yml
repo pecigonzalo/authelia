@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+---
+session:
+  name: 'authelia_session'
+  expiration: '1 hour'
+  inactivity: '5 minutes'
+  domain: '{{ env "ROOT_DOMAIN" }}'
+
+cache:
+  redis_sentinel:
+    master_name: 'test'
+    addresses:
+      - 'tcp://{{ env "SERVICES_SERVER" }}:6379'
+...

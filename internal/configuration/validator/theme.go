@@ -1,8 +1,11 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package validator
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
 	"github.com/authelia/authelia/v4/internal/utils"
@@ -15,6 +18,6 @@ func ValidateTheme(config *schema.Configuration, validator *schema.StructValidat
 	}
 
 	if !utils.IsStringInSlice(config.Theme, validThemeNames) {
-		validator.Push(fmt.Errorf(errFmtThemeName, strings.Join(validThemeNames, "', '"), config.Theme))
+		validator.Push(fmt.Errorf(errFmtThemeName, utils.StringJoinOr(validThemeNames), config.Theme))
 	}
 }

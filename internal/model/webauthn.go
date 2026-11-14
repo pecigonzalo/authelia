@@ -1,16 +1,22 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package model
 
 import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 const (
@@ -19,14 +25,18 @@ const (
 
 // WebAuthnUser is an object to represent a user for the WebAuthn lib.
 type WebAuthnUser struct {
-	Username    string
-	DisplayName string
-	Devices     []WebAuthnDevice
+	ID          int    `db:"id"`
+	RPID        string `db:"rpid"`
+	Username    string `db:"username"`
+	UserID      string `db:"userid"`
+	DisplayName string `db:"-"`
+
+	Credentials []WebAuthnCredential `db:"-"`
 }
 
-// HasFIDOU2F returns true if the user has any attestation type `fido-u2f` devices.
-func (w WebAuthnUser) HasFIDOU2F() bool {
-	for _, c := range w.Devices {
+// HasFIDOU2F returns true if the user has any attestation type `fido-u2f` credentials.
+func (u WebAuthnUser) HasFIDOU2F() bool {
+	for _, c := range u.Credentials {
 		if c.AttestationType == attestationTypeFIDOU2F {
 			return true
 		}
@@ -36,68 +46,48 @@ func (w WebAuthnUser) HasFIDOU2F() bool {
 }
 
 // WebAuthnID implements the webauthn.User interface.
-func (w WebAuthnUser) WebAuthnID() []byte {
-	return []byte(w.Username)
+func (u WebAuthnUser) WebAuthnID() []byte {
+	return []byte(u.UserID)
 }
 
 // WebAuthnName implements the webauthn.User  interface.
-func (w WebAuthnUser) WebAuthnName() string {
-	return w.Username
+func (u WebAuthnUser) WebAuthnName() string {
+	return u.Username
 }
 
 // WebAuthnDisplayName implements the webauthn.User interface.
-func (w WebAuthnUser) WebAuthnDisplayName() string {
-	return w.DisplayName
+func (u WebAuthnUser) WebAuthnDisplayName() string {
+	return u.DisplayName
 }
 
 // WebAuthnIcon implements the webauthn.User interface.
-func (w WebAuthnUser) WebAuthnIcon() string {
+func (u WebAuthnUser) WebAuthnIcon() string {
 	return ""
 }
 
 // WebAuthnCredentials implements the webauthn.User interface.
-func (w WebAuthnUser) WebAuthnCredentials() (credentials []webauthn.Credential) {
-	credentials = make([]webauthn.Credential, len(w.Devices))
+func (u WebAuthnUser) WebAuthnCredentials() (credentials []webauthn.Credential) {
+	credentials = make([]webauthn.Credential, len(u.Credentials))
 
-	var credential webauthn.Credential
+	var (
+		credential *webauthn.Credential
+		err        error
+	)
 
-	for i, device := range w.Devices {
-		aaguid, err := device.AAGUID.MarshalBinary()
-		if err != nil {
+	for i, c := range u.Credentials {
+		if credential, err = c.ToCredential(); err != nil {
 			continue
 		}
 
-		credential = webauthn.Credential{
-			ID:              device.KID.Bytes(),
-			PublicKey:       device.PublicKey,
-			AttestationType: device.AttestationType,
-			Authenticator: webauthn.Authenticator{
-				AAGUID:       aaguid,
-				SignCount:    device.SignCount,
-				CloneWarning: device.CloneWarning,
-			},
-		}
-
-		transports := strings.Split(device.Transport, ",")
-		credential.Transport = []protocol.AuthenticatorTransport{}
-
-		for _, t := range transports {
-			if t == "" {
-				continue
-			}
-
-			credential.Transport = append(credential.Transport, protocol.AuthenticatorTransport(t))
-		}
-
-		credentials[i] = credential
+		credentials[i] = *credential
 	}
 
 	return credentials
 }
 
 // WebAuthnCredentialDescriptors decodes the users credentials into protocol.CredentialDescriptor's.
-func (w WebAuthnUser) WebAuthnCredentialDescriptors() (descriptors []protocol.CredentialDescriptor) {
-	credentials := w.WebAuthnCredentials()
+func (u WebAuthnUser) WebAuthnCredentialDescriptors() (descriptors []protocol.CredentialDescriptor) {
+	credentials := u.WebAuthnCredentials()
 
 	descriptors = make([]protocol.CredentialDescriptor, len(credentials))
 
@@ -108,74 +98,102 @@ func (w WebAuthnUser) WebAuthnCredentialDescriptors() (descriptors []protocol.Cr
 	return descriptors
 }
 
-// NewWebAuthnDeviceFromCredential creates a WebAuthnDevice from a webauthn.Credential.
-func NewWebAuthnDeviceFromCredential(rpid, username, description string, credential *webauthn.Credential) (device WebAuthnDevice) {
+// NewWebAuthnCredential creates a WebAuthnCredential from a webauthn.Credential.
+func NewWebAuthnCredential(ctx Context, rpid, username, description string, credential *webauthn.Credential) (c WebAuthnCredential) {
 	transport := make([]string, len(credential.Transport))
 
 	for i, t := range credential.Transport {
 		transport[i] = string(t)
 	}
 
-	device = WebAuthnDevice{
-		RPID:            rpid,
-		Username:        username,
-		CreatedAt:       time.Now(),
-		Description:     description,
-		KID:             NewBase64(credential.ID),
-		PublicKey:       credential.PublicKey,
-		AttestationType: credential.AttestationType,
-		SignCount:       credential.Authenticator.SignCount,
-		CloneWarning:    credential.Authenticator.CloneWarning,
-		Transport:       strings.Join(transport, ","),
+	c = WebAuthnCredential{
+		RPID:              rpid,
+		Username:          username,
+		CreatedAt:         ctx.GetClock().Now(),
+		Description:       description,
+		KID:               NewBase64(credential.ID),
+		AttestationType:   credential.AttestationType,
+		AttestationFormat: credential.AttestationFormat,
+		Attachment:        string(credential.Authenticator.Attachment),
+		Transport:         strings.Join(transport, ","),
+		SignCount:         credential.Authenticator.SignCount,
+		CloneWarning:      credential.Authenticator.CloneWarning,
+		Discoverable:      false,
+		Present:           credential.Flags.UserPresent,
+		Verified:          credential.Flags.UserVerified,
+		BackupEligible:    credential.Flags.BackupEligible,
+		BackupState:       credential.Flags.BackupState,
+		PublicKey:         credential.PublicKey,
 	}
+
+	c.Attestation, _ = json.Marshal(credential.Attestation)
 
 	aaguid, err := uuid.Parse(hex.EncodeToString(credential.Authenticator.AAGUID))
-	if err == nil && aaguid.ID() != 0 {
-		device.AAGUID = uuid.NullUUID{Valid: true, UUID: aaguid}
+	if err == nil {
+		c.AAGUID = NullUUID(aaguid)
 	}
 
-	return device
+	return c
 }
 
-// WebAuthnDevice represents a WebAuthn Device in the database storage.
-type WebAuthnDevice struct {
-	ID              int           `db:"id"`
-	CreatedAt       time.Time     `db:"created_at"`
-	LastUsedAt      sql.NullTime  `db:"last_used_at"`
-	RPID            string        `db:"rpid"`
-	Username        string        `db:"username"`
-	Description     string        `db:"description"`
-	KID             Base64        `db:"kid"`
-	PublicKey       []byte        `db:"public_key"`
-	AttestationType string        `db:"attestation_type"`
-	Transport       string        `db:"transport"`
-	AAGUID          uuid.NullUUID `db:"aaguid"`
-	SignCount       uint32        `db:"sign_count"`
-	CloneWarning    bool          `db:"clone_warning"`
+// WebAuthnCredential represents a WebAuthn Credential in the database storage.
+type WebAuthnCredential struct {
+	ID                int           `db:"id"`
+	CreatedAt         time.Time     `db:"created_at"`
+	LastUsedAt        sql.NullTime  `db:"last_used_at"`
+	RPID              string        `db:"rpid"`
+	Username          string        `db:"username"`
+	Description       string        `db:"description"`
+	KID               Base64        `db:"kid"`
+	AAGUID            uuid.NullUUID `db:"aaguid"`
+	AttestationType   string        `db:"attestation_type"`
+	AttestationFormat string        `db:"attestation_format"`
+	Attachment        string        `db:"attachment"`
+	Transport         string        `db:"transport"`
+	SignCount         uint32        `db:"sign_count"`
+	CloneWarning      bool          `db:"clone_warning"`
+	Legacy            bool          `db:"legacy"`
+	Discoverable      bool          `db:"discoverable"`
+	Present           bool          `db:"present"`
+	Verified          bool          `db:"verified"`
+	BackupEligible    bool          `db:"backup_eligible"`
+	BackupState       bool          `db:"backup_state"`
+	PublicKey         []byte        `db:"public_key"`
+	Attestation       []byte        `db:"attestation"`
 }
 
-// UpdateSignInInfo adjusts the values of the WebAuthnDevice after a sign in.
-func (d *WebAuthnDevice) UpdateSignInInfo(config *webauthn.Config, now time.Time, signCount uint32) {
-	d.LastUsedAt = sql.NullTime{Time: now, Valid: true}
+// UpdateSignInInfo adjusts the values of the WebAuthnCredential after a sign in.
+func (c *WebAuthnCredential) UpdateSignInInfo(config *webauthn.Config, now time.Time, credential *webauthn.Credential) {
+	c.LastUsedAt = sql.NullTime{Time: now, Valid: true}
+	c.SignCount, c.CloneWarning = credential.Authenticator.SignCount, credential.Authenticator.CloneWarning
 
-	d.SignCount = signCount
+	c.UpdateAttestationType(credential)
 
-	if d.RPID != "" {
+	if c.RPID != "" || config == nil {
 		return
 	}
 
-	switch d.AttestationType {
+	switch c.AttestationType {
 	case attestationTypeFIDOU2F:
-		d.RPID = config.RPOrigin
+		c.RPID = config.RPOrigins[0]
 	default:
-		d.RPID = config.RPID
+		c.RPID = config.RPID
 	}
 }
 
-// LastUsed provides LastUsedAt as a *time.Time instead of sql.NullTime.
-func (d *WebAuthnDevice) LastUsed() *time.Time {
-	if d.LastUsedAt.Valid {
-		value := time.Unix(d.LastUsedAt.Time.Unix(), int64(d.LastUsedAt.Time.Nanosecond()))
+// UpdateAttestationType adjusts the AttestationType value to handle legacy configurations.
+func (c *WebAuthnCredential) UpdateAttestationType(credential *webauthn.Credential) {
+	if c.AttestationType != "" {
+		return
+	}
+
+	c.AttestationType = credential.AttestationType
+}
+
+// DataValueLastUsedAt provides LastUsedAt as a *[time.Time] instead of [sql.NullTime].
+func (c *WebAuthnCredential) DataValueLastUsedAt() *time.Time {
+	if c.LastUsedAt.Valid {
+		value := time.Unix(c.LastUsedAt.Time.Unix(), int64(c.LastUsedAt.Time.Nanosecond()))
 
 		return &value
 	}
@@ -183,49 +201,131 @@ func (d *WebAuthnDevice) LastUsed() *time.Time {
 	return nil
 }
 
-// ToData converts this WebAuthnDevice into the data format for exporting etc.
-func (d *WebAuthnDevice) ToData() WebAuthnDeviceData {
-	return WebAuthnDeviceData{
-		CreatedAt:       d.CreatedAt,
-		LastUsedAt:      d.LastUsed(),
-		RPID:            d.RPID,
-		Username:        d.Username,
-		Description:     d.Description,
-		KID:             d.KID.String(),
-		PublicKey:       base64.StdEncoding.EncodeToString(d.PublicKey),
-		AttestationType: d.AttestationType,
-		Transport:       d.Transport,
-		AAGUID:          d.AAGUID.UUID.String(),
-		SignCount:       d.SignCount,
-		CloneWarning:    d.CloneWarning,
+// DataValueAAGUID provides AAGUID as a *string instead of uuid.NullUUID.
+func (c *WebAuthnCredential) DataValueAAGUID() *string {
+	if c.AAGUID.Valid {
+		value := c.AAGUID.UUID.String()
+
+		return &value
 	}
+
+	return nil
+}
+
+// ToCredential returns the webauthn.Credential representation of this credential.
+func (c *WebAuthnCredential) ToCredential() (credential *webauthn.Credential, err error) {
+	credential = &webauthn.Credential{
+		ID:                c.KID.Bytes(),
+		PublicKey:         c.PublicKey,
+		AttestationType:   c.AttestationType,
+		AttestationFormat: c.AttestationFormat,
+		Flags: webauthn.CredentialFlags{
+			UserPresent:    c.Present,
+			UserVerified:   c.Verified,
+			BackupEligible: c.BackupEligible,
+			BackupState:    c.BackupState,
+		},
+		Authenticator: webauthn.Authenticator{
+			SignCount:    c.SignCount,
+			CloneWarning: c.CloneWarning,
+			Attachment:   protocol.AuthenticatorAttachment(c.Attachment),
+		},
+	}
+
+	// This function never returns errors though we return here just in case that changes.
+	if credential.Authenticator.AAGUID, err = c.AAGUID.MarshalBinary(); err != nil {
+		return nil, err
+	}
+
+	if len(c.Attestation) != 0 {
+		if err = json.Unmarshal(c.Attestation, &credential.Attestation); err != nil {
+			return nil, err
+		}
+	}
+
+	transports := strings.Split(c.Transport, ",")
+	credential.Transport = []protocol.AuthenticatorTransport{}
+
+	for _, t := range transports {
+		if t == "" {
+			continue
+		}
+
+		credential.Transport = append(credential.Transport, protocol.AuthenticatorTransport(t))
+	}
+
+	return credential, nil
+}
+
+// ToData returns the WebAuthnCredentialData representation of this credential.
+func (c *WebAuthnCredential) ToData() WebAuthnCredentialData {
+	o := WebAuthnCredentialData{
+		ID:                c.ID,
+		CreatedAt:         c.CreatedAt,
+		LastUsedAt:        c.DataValueLastUsedAt(),
+		RPID:              c.RPID,
+		Username:          c.Username,
+		Description:       c.Description,
+		KID:               c.KID.String(),
+		AAGUID:            c.DataValueAAGUID(),
+		AttestationType:   c.AttestationType,
+		AttestationFormat: c.AttestationFormat,
+		Attachment:        c.Attachment,
+		SignCount:         c.SignCount,
+		CloneWarning:      c.CloneWarning,
+		Legacy:            c.Legacy,
+		Discoverable:      c.Discoverable,
+		Present:           c.Present,
+		Verified:          c.Verified,
+		BackupEligible:    c.BackupEligible,
+		BackupState:       c.BackupState,
+		PublicKey:         base64.StdEncoding.EncodeToString(c.PublicKey),
+		Attestation:       base64.StdEncoding.EncodeToString(c.Attestation),
+	}
+
+	if c.Transport != "" {
+		o.Transports = strings.Split(c.Transport, ",")
+	}
+
+	return o
+}
+
+// MarshalJSON returns the WebAuthnCredential in a JSON friendly manner.
+func (c *WebAuthnCredential) MarshalJSON() (data []byte, err error) {
+	return json.Marshal(c.ToData())
 }
 
 // MarshalYAML marshals this model into YAML.
-func (d *WebAuthnDevice) MarshalYAML() (any, error) {
-	return d.ToData(), nil
+func (c *WebAuthnCredential) MarshalYAML() (any, error) {
+	return c.ToData(), nil
 }
 
 // UnmarshalYAML unmarshalls YAML into this model.
-func (d *WebAuthnDevice) UnmarshalYAML(value *yaml.Node) (err error) {
-	o := &WebAuthnDeviceData{}
+func (c *WebAuthnCredential) UnmarshalYAML(value *yaml.Node) (err error) {
+	o := &WebAuthnCredentialData{}
 
 	if err = value.Decode(o); err != nil {
 		return err
 	}
 
-	if d.PublicKey, err = base64.StdEncoding.DecodeString(o.PublicKey); err != nil {
+	if c.PublicKey, err = base64.StdEncoding.DecodeString(o.PublicKey); err != nil {
 		return err
+	}
+
+	if len(o.Attestation) != 0 {
+		if c.Attestation, err = base64.StdEncoding.DecodeString(o.Attestation); err != nil {
+			return err
+		}
 	}
 
 	var aaguid uuid.UUID
 
-	if aaguid, err = uuid.Parse(o.AAGUID); err != nil {
-		return err
-	}
+	if o.AAGUID != nil {
+		if aaguid, err = uuid.Parse(*o.AAGUID); err != nil {
+			return err
+		}
 
-	if aaguid.ID() != 0 {
-		d.AAGUID = uuid.NullUUID{Valid: true, UUID: aaguid}
+		c.AAGUID = NullUUID(aaguid)
 	}
 
 	var kid []byte
@@ -234,64 +334,161 @@ func (d *WebAuthnDevice) UnmarshalYAML(value *yaml.Node) (err error) {
 		return err
 	}
 
-	d.KID = NewBase64(kid)
+	c.KID = NewBase64(kid)
 
-	d.CreatedAt = o.CreatedAt
-	d.RPID = o.RPID
-	d.Username = o.Username
-	d.Description = o.Description
-	d.AttestationType = o.AttestationType
-	d.Transport = o.Transport
-	d.SignCount = o.SignCount
-	d.CloneWarning = o.CloneWarning
+	c.CreatedAt = o.CreatedAt
+	c.RPID = o.RPID
+	c.Username = o.Username
+	c.Description = o.Description
+	c.AttestationType = o.AttestationType
+	c.AttestationFormat = o.AttestationFormat
+	c.Attachment = o.Attachment
+	c.Transport = strings.Join(o.Transports, ",")
+	c.SignCount = o.SignCount
+	c.CloneWarning = o.CloneWarning
+	c.Legacy = o.Legacy
+	c.Discoverable = o.Discoverable
+	c.Present = o.Present
+	c.Verified = o.Verified
+	c.BackupEligible = o.BackupEligible
+	c.BackupState = o.BackupState
 
 	if o.LastUsedAt != nil {
-		d.LastUsedAt = sql.NullTime{Valid: true, Time: *o.LastUsedAt}
+		c.LastUsedAt = sql.NullTime{Valid: true, Time: *o.LastUsedAt}
 	}
 
 	return nil
 }
 
-// WebAuthnDeviceData represents a WebAuthn Device in the database storage.
-type WebAuthnDeviceData struct {
-	CreatedAt       time.Time  `yaml:"created_at"`
-	LastUsedAt      *time.Time `yaml:"last_used_at"`
-	RPID            string     `yaml:"rpid"`
-	Username        string     `yaml:"username"`
-	Description     string     `yaml:"description"`
-	KID             string     `yaml:"kid"`
-	PublicKey       string     `yaml:"public_key"`
-	AttestationType string     `yaml:"attestation_type"`
-	Transport       string     `yaml:"transport"`
-	AAGUID          string     `yaml:"aaguid"`
-	SignCount       uint32     `yaml:"sign_count"`
-	CloneWarning    bool       `yaml:"clone_warning"`
+// WebAuthnCredentialData represents a WebAuthn Credential in a way which can be serialized.
+type WebAuthnCredentialData struct {
+	ID                int        `json:"id" yaml:"-" toml:"-"`
+	CreatedAt         time.Time  `yaml:"created_at" toml:"created_at" json:"created_at" jsonschema:"title=Created At" jsonschema_description:"The time this credential was created."`
+	LastUsedAt        *time.Time `yaml:"last_used_at,omitempty" toml:"last_used_at,omitempty" json:"last_used_at,omitempty" jsonschema:"title=Last Used At" jsonschema_description:"The last time this credential was used."`
+	RPID              string     `yaml:"rpid" toml:"rpid" json:"rpid" jsonschema:"title=Relying Party ID" jsonschema_description:"The Relying Party ID used to register this credential."`
+	Username          string     `yaml:"username" toml:"username" json:"username" jsonschema:"title=Username" jsonschema_description:"The username of the user this credential belongs to."`
+	Description       string     `yaml:"description" toml:"description" json:"description" jsonschema:"title=Description" jsonschema_description:"The user description of this credential."`
+	KID               string     `yaml:"kid" toml:"kid" json:"kid" jsonschema:"title=Public Key ID" jsonschema_description:"The Public Key ID of this credential."`
+	AAGUID            *string    `yaml:"aaguid,omitempty" toml:"aaguid,omitempty" json:"aaguid,omitempty" jsonschema:"title=AAGUID" jsonschema_description:"The Authenticator Attestation Global Unique Identifier of this credential."`
+	AttestationType   string     `yaml:"attestation_type" toml:"attestation_type" json:"attestation_type" jsonschema:"title=Attestation Type" jsonschema_description:"The attestation type this credential uses."`
+	AttestationFormat string     `yaml:"attestation_format" toml:"attestation_format" json:"attestation_format" jsonschema:"title=Attestation Format" jsonschema_description:"The attestation format this credential uses."`
+	Attachment        string     `yaml:"attachment" toml:"attachment" json:"attachment" jsonschema:"title=Attachment" jsonschema_description:"The last recorded credential attachment type."`
+	Transports        []string   `yaml:"transports" toml:"transports" json:"transports" jsonschema:"title=Transports" jsonschema_description:"The last recorded credential transports."`
+	SignCount         uint32     `yaml:"sign_count" toml:"sign_count" json:"sign_count" jsonschema:"title=Sign Count" jsonschema_description:"The last recorded credential sign count."`
+	CloneWarning      bool       `yaml:"clone_warning" toml:"clone_warning" json:"clone_warning" jsonschema:"title=Clone Warning" jsonschema_description:"The clone warning status of the credential."`
+	Legacy            bool       `yaml:"legacy" toml:"legacy" json:"legacy" jsonschema:"title=Legacy" jsonschema_description:"The legacy value indicates this credential may need to be registered again."`
+	Discoverable      bool       `yaml:"discoverable" toml:"discoverable" json:"discoverable" jsonschema:"title=Discoverable" jsonschema_description:"The discoverable status of this credential."`
+	Present           bool       `yaml:"present" toml:"present" json:"present" jsonschema:"title=Present" jsonschema_description:"The user presence status of this credential."`
+	Verified          bool       `yaml:"verified" toml:"verified" json:"verified" jsonschema:"title=Verified" jsonschema_description:"The verified status of this credential."`
+	BackupEligible    bool       `yaml:"backup_eligible" toml:"backup_eligible" json:"backup_eligible" jsonschema:"title=Backup Eligible" jsonschema_description:"The backup eligible status of this credential."`
+	BackupState       bool       `yaml:"backup_state" toml:"backup_state" json:"backup_state" jsonschema:"title=Backup State" jsonschema_description:"The backup state of this credential."`
+	PublicKey         string     `yaml:"public_key" toml:"public_key" json:"public_key" jsonschema:"title=Public Key" jsonschema_description:"The credential public key."`
+	Attestation       string     `yaml:"attestation" toml:"attestation" json:"attestation,omitempty" jsonschema:"title=Attestation" jsonschema_description:"The credential attestation information for auditing and validation."`
 }
 
-// WebAuthnDeviceExport represents a WebAuthnDevice export file.
-type WebAuthnDeviceExport struct {
-	WebAuthnDevices []WebAuthnDevice `yaml:"webauthn_devices"`
-}
-
-// WebAuthnDeviceDataExport represents a WebAuthnDevice export file.
-type WebAuthnDeviceDataExport struct {
-	WebAuthnDevices []WebAuthnDeviceData `yaml:"webauthn_devices"`
-}
-
-// ToData converts this WebAuthnDeviceExport into a WebAuthnDeviceDataExport.
-func (export WebAuthnDeviceExport) ToData() WebAuthnDeviceDataExport {
-	data := WebAuthnDeviceDataExport{
-		WebAuthnDevices: make([]WebAuthnDeviceData, len(export.WebAuthnDevices)),
+// ToCredential returns the WebAuthnCredential representation of this data.
+func (c *WebAuthnCredentialData) ToCredential() (credential *WebAuthnCredential, err error) {
+	credential = &WebAuthnCredential{
+		CreatedAt:         c.CreatedAt,
+		RPID:              c.RPID,
+		Username:          c.Username,
+		Description:       c.Description,
+		AttestationType:   c.AttestationType,
+		AttestationFormat: c.AttestationFormat,
+		Attachment:        c.Attachment,
+		Transport:         strings.Join(c.Transports, ","),
+		SignCount:         c.SignCount,
+		CloneWarning:      c.CloneWarning,
+		Legacy:            c.Legacy,
+		Discoverable:      c.Discoverable,
+		Present:           c.Present,
+		Verified:          c.Verified,
+		BackupEligible:    c.BackupEligible,
+		BackupState:       c.BackupState,
 	}
 
-	for i, device := range export.WebAuthnDevices {
-		data.WebAuthnDevices[i] = device.ToData()
+	if len(c.PublicKey) != 0 {
+		if credential.PublicKey, err = base64.StdEncoding.DecodeString(c.PublicKey); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(c.Attestation) != 0 {
+		if credential.Attestation, err = base64.StdEncoding.DecodeString(c.Attestation); err != nil {
+			return nil, err
+		}
+	}
+
+	var aaguid uuid.UUID
+
+	if c.AAGUID != nil {
+		if aaguid, err = uuid.Parse(*c.AAGUID); err != nil {
+			return nil, fmt.Errorf("error occurred parsing aaguid: %w", err)
+		}
+
+		credential.AAGUID = NullUUID(aaguid)
+	}
+
+	if len(c.KID) != 0 {
+		var kid []byte
+
+		if kid, err = base64.StdEncoding.DecodeString(c.KID); err != nil {
+			return nil, fmt.Errorf("error occurred decoding kid: %w", err)
+		}
+
+		credential.KID = NewBase64(kid)
+	}
+
+	if c.LastUsedAt != nil {
+		credential.LastUsedAt = sql.NullTime{Valid: true, Time: *c.LastUsedAt}
+	}
+
+	return credential, nil
+}
+
+// WebAuthnCredentialExport represents a WebAuthnCredential export file.
+type WebAuthnCredentialExport struct {
+	WebAuthnCredentials []WebAuthnCredential `yaml:"webauthn_credentials" toml:"webauthn_credentials"`
+}
+
+// WebAuthnCredentialDataExport represents a WebAuthnCredential export file.
+type WebAuthnCredentialDataExport struct {
+	WebAuthnCredentials []WebAuthnCredentialData `yaml:"webauthn_credentials" toml:"webauthn_credentials" json:"webauthn_credentials" jsonschema:"title=WebAuthn Credentials" jsonschema_description:"The list of WebAuthn credentials."`
+}
+
+// ToData converts this WebAuthnCredentialExport into a WebAuthnCredentialDataExport.
+func (export WebAuthnCredentialExport) ToData() WebAuthnCredentialDataExport {
+	data := WebAuthnCredentialDataExport{
+		WebAuthnCredentials: make([]WebAuthnCredentialData, len(export.WebAuthnCredentials)),
+	}
+
+	for i, credential := range export.WebAuthnCredentials {
+		data.WebAuthnCredentials[i] = credential.ToData()
 	}
 
 	return data
 }
 
 // MarshalYAML marshals this model into YAML.
-func (export WebAuthnDeviceExport) MarshalYAML() (any, error) {
+func (export WebAuthnCredentialExport) MarshalYAML() (any, error) {
 	return export.ToData(), nil
+}
+
+// ToExport converts this WebAuthnCredentialDataExport into a WebAuthnCredentialExport.
+func (export WebAuthnCredentialDataExport) ToExport() (data WebAuthnCredentialExport, err error) {
+	data = WebAuthnCredentialExport{
+		WebAuthnCredentials: make([]WebAuthnCredential, len(export.WebAuthnCredentials)),
+	}
+
+	for i, credential := range export.WebAuthnCredentials {
+		var c *WebAuthnCredential
+
+		if c, err = credential.ToCredential(); err != nil {
+			return WebAuthnCredentialExport{}, fmt.Errorf("error occurred parsing webauthn credential %d: %w", i, err)
+		}
+
+		data.WebAuthnCredentials[i] = *c
+	}
+
+	return data, nil
 }

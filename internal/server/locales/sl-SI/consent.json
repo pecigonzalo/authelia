@@ -1,0 +1,42 @@
+{
+	"Claim": "Zahtevaj {{name}}",
+	"Client ID": "ID klienta: {{client_id}}",
+	"Consent Request": "Zahteva za soglasje",
+	"Remember Consent": "Zapomni si privolitev",
+	"Scope": "Obseg {{name}}",
+	"The above application is requesting the following permissions": "Zgornja aplikacija zahteva naslednja dovoljenja",
+	"This saves this consent as a pre-configured consent for future use": "S tem se to soglasje shrani kot vnaprej konfigurirano soglasje za prihodnjo uporabo",
+	"claims": {
+		"address": "Poštni naslov",
+		"birthdate": "Datum rojstva",
+		"email": "E-poštni naslov",
+		"email_verified": "E-poštni naslov (verificiran)",
+		"family_name": "Priimek",
+		"gender": "Spol",
+		"given_name": "Ime",
+		"groups": "Članstvo v skupini",
+		"locale": "Jezik / Lokalno",
+		"middle_name": "Srednje ime",
+		"name": "Prikazno ime",
+		"nickname": "Vzdevek",
+		"phone_number": "Telefonska številka",
+		"phone_number_verified": "Telefonska številka (verificirana)",
+		"picture": "URL slike",
+		"preferred_username": "Želeno uporabniško ime",
+		"profile": "URL profila",
+		"sub": "Edinstveni identifikator",
+		"updated_at": "Čas posodobitve profila",
+		"website": "URL spletne strani",
+		"zoneinfo": "Časovni pas"
+	},
+	"scopes": {
+		"address": "Dostop do vaše naslova",
+		"authelia.bearer.authz": "Dostop do zaščitenih virov prijavljen kot vi",
+		"email": "Dostop do vaših e-poštnih naslovov",
+		"groups": "Dostop do članstva v skupini",
+		"offline_access": "Samodejno osvežite ta dovoljenja brez interakcije uporabnika",
+		"openid": "Uporabite OpenID za preverjanje vaše identitete",
+		"phone": "Dostop do vašega telefonskega številke",
+		"profile": "Dostop do podatkov o vašem profilu"
+	}
+}

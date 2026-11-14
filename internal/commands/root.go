@@ -1,14 +1,18 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package commands
 
 import (
+	"errors"
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/authelia/authelia/v4/internal/logging"
-	"github.com/authelia/authelia/v4/internal/model"
+	"github.com/authelia/authelia/v4/internal/middlewares"
+	"github.com/authelia/authelia/v4/internal/service"
 	"github.com/authelia/authelia/v4/internal/utils"
 )
 
@@ -27,9 +31,11 @@ func NewRootCmd() (cmd *cobra.Command) {
 		Args:    cobra.NoArgs,
 		PreRunE: ctx.ChainRunE(
 			ctx.ConfigEnsureExistsRunE,
-			ctx.ConfigLoadRunE,
-			ctx.ConfigValidateKeysRunE,
-			ctx.ConfigValidateRunE,
+			ctx.HelperConfigLoadRunE,
+			ctx.LogConfigure,
+			ctx.LogProcessCurrentUserRunE,
+			ctx.HelperConfigValidateKeysRunE,
+			ctx.HelperConfigValidateRunE,
 			ctx.ConfigValidateLogRunE,
 		),
 		RunE: ctx.RootRunE,
@@ -38,108 +44,85 @@ func NewRootCmd() (cmd *cobra.Command) {
 	}
 
 	cmd.PersistentFlags().StringSliceP(cmdFlagNameConfig, "c", []string{"configuration.yml"}, "configuration files or directories to load, for more information run 'authelia -h authelia config'")
+	cmd.PersistentFlags().StringSlice(cmdFlagNameConfigFilters, nil, "list of filters to apply to all configuration files, for more information run 'authelia -h authelia filters'")
+	cmd.PersistentFlags().StringSlice(cmdFlagNameConfigExpFilters, nil, "deprecated alias of the '--config.filters' flag")
+	cmd.PersistentFlags().StringSlice(cmdFlagNameConfigFiltersValues, nil, "file paths of values files (.yml, .yaml, .json, .toml) to utilize with configuration file filters; files are loaded in order with later files deep-merged on top, for more information run 'authelia -h authelia filters'")
+	cmd.PersistentFlags().String(cmdFlagNameConfigFiltersTemplateDelimiterLeft, "", "sets the left delimiter for the 'template' filter")
+	cmd.PersistentFlags().String(cmdFlagNameConfigFiltersTemplateDelimiterRight, "", "sets the right delimiter for the 'template' filter")
 
-	cmd.PersistentFlags().StringSlice(cmdFlagNameConfigExpFilters, nil, "list of filters to apply to all configuration files, for more information run 'authelia -h authelia filters'")
+	_ = cmd.PersistentFlags().MarkHidden(cmdFlagNameConfigExpFilters)
 
 	cmd.AddCommand(
 		newAccessControlCommand(ctx),
 		newBuildInfoCmd(ctx),
 		newCryptoCmd(ctx),
 		newStorageCmd(ctx),
-		newValidateConfigCmd(ctx),
+		newConfigCmd(ctx),
+		newConfigValidateLegacyCmd(ctx),
+		newDebugCmd(ctx),
 
 		newHelpTopic("config", "Help for the config file/directory paths", helpTopicConfig),
 		newHelpTopic("filters", "help topic for the config filters", helpTopicConfigFilters),
 		newHelpTopic("time-layouts", "help topic for the various time layouts", helpTopicTimeLayouts),
+		newHelpTopic("hash-password", "help topic for hashing passwords", helpTopicHashPassword),
 	)
 
 	return cmd
 }
 
-func (ctx *CmdCtx) RootRunE(_ *cobra.Command, _ []string) (err error) {
-	ctx.log.Infof("Authelia %s is starting", utils.Version())
+// RootRunE is the RunE for the authelia root command.
+func (ctx *CmdCtx) RootRunE(cmd *cobra.Command, _ []string) (err error) {
+	ctx.GetLogger().Infof("Authelia %s is starting", utils.Version())
 
-	if os.Getenv("ENVIRONMENT") == "dev" {
-		ctx.log.Info("===> Authelia is running in development mode. <===")
+	if utils.Dev {
+		ctx.GetLogger().Info("===> Authelia is running in development mode. <===")
 	}
 
-	if err = logging.InitializeLogger(ctx.config.Log, true); err != nil {
-		ctx.log.Fatalf("Cannot initialize logger: %v", err)
+	if err = logging.ConfigureLogger(ctx.config.Log, true); err != nil {
+		ctx.GetLogger().Fatalf("Cannot configure logger: %v", err)
 	}
 
 	warns, errs := ctx.LoadProviders()
 
 	if len(warns) != 0 {
 		for _, err = range warns {
-			ctx.log.Warn(err)
+			ctx.GetLogger().Warn(err)
 		}
 	}
 
 	if len(errs) != 0 {
 		for _, err = range errs {
-			ctx.log.Error(err)
+			ctx.GetLogger().Error(err)
 		}
 
-		ctx.log.Fatalf("Errors occurred provisioning providers.")
+		ctx.GetLogger().Fatal("Errors occurred provisioning providers")
 	}
 
-	doStartupChecks(ctx)
+	if err = ctx.providers.StartupChecks(ctx, true); err != nil {
+		var scerr *middlewares.ErrProviderStartupCheck
+		if errors.As(err, &scerr) {
+			ctx.GetLogger().WithField("providers", scerr.Failed()).Fatalf("One or more providers had fatal failures performing startup checks, for more details check the error level logs")
+		} else {
+			ctx.GetLogger().Fatal("Errors occurred performing startup checks")
+		}
+	}
+
+	if err = ctx.providers.Finalize(ctx); err != nil {
+		ctx.GetLogger().WithError(err).Fatal("Error finalizing providers")
+	}
 
 	ctx.cconfig = nil
 
-	servicesRun(ctx)
+	ctx.GetLogger().Trace("Starting Services")
+
+	if err = service.RunAll(ctx); err != nil {
+		if errors.Is(err, service.ErrApplicationReload) {
+			// The reload error is handled by the caller of the command, it's not a usage or reportable error.
+			cmd.SilenceErrors, cmd.SilenceUsage = true, true
+		}
+
+		return err
+	}
 
 	return nil
-}
-
-func doStartupChecks(ctx *CmdCtx) {
-	var (
-		failures []string
-		err      error
-	)
-
-	if err = doStartupCheck(ctx, "storage", ctx.providers.StorageProvider, false); err != nil {
-		ctx.log.Errorf("Failure running the storage provider startup check: %+v", err)
-
-		failures = append(failures, "storage")
-	}
-
-	if err = doStartupCheck(ctx, "user", ctx.providers.UserProvider, false); err != nil {
-		ctx.log.Errorf("Failure running the user provider startup check: %+v", err)
-
-		failures = append(failures, "user")
-	}
-
-	if err = doStartupCheck(ctx, "notification", ctx.providers.Notifier, ctx.config.Notifier.DisableStartupCheck); err != nil {
-		ctx.log.Errorf("Failure running the notification provider startup check: %+v", err)
-
-		failures = append(failures, "notification")
-	}
-
-	if !ctx.config.NTP.DisableStartupCheck && !ctx.providers.Authorizer.IsSecondFactorEnabled() {
-		ctx.log.Debug("The NTP startup check was skipped due to there being no configured 2FA access control rules")
-	} else if err = doStartupCheck(ctx, "ntp", ctx.providers.NTP, ctx.config.NTP.DisableStartupCheck); err != nil {
-		ctx.log.Errorf("Failure running the ntp provider startup check: %+v", err)
-
-		if !ctx.config.NTP.DisableFailure {
-			failures = append(failures, "ntp")
-		}
-	}
-
-	if len(failures) != 0 {
-		ctx.log.Fatalf("The following providers had fatal failures during startup: %s", strings.Join(failures, ", "))
-	}
-}
-
-func doStartupCheck(ctx *CmdCtx, name string, provider model.StartupCheck, disabled bool) error {
-	if disabled {
-		ctx.log.Debugf("%s provider: startup check skipped as it is disabled", name)
-		return nil
-	}
-
-	if provider == nil {
-		return fmt.Errorf("unrecognized provider or it is not configured properly")
-	}
-
-	return provider.StartupCheck()
 }

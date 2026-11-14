@@ -1,0 +1,291 @@
+---
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+title: "Server Endpoint Rate Limits"
+description: "Configuring Authelia server endpoint rate limits including bucket-based rate limiting for password resets, second factor attempts, and session elevation."
+summary: "Authelia supports several authorization endpoints on the internal web server. This section describes how to configure and tune them."
+date: 2025-03-01T03:28:19+00:00
+draft: false
+images: []
+menu:
+configuration:
+parent: "miscellaneous"
+weight: 199210
+toc: true
+aliases:
+  - /c/authz
+seo:
+  title: "" # custom title (optional)
+  description: "" # custom description (recommended)
+  canonical: "" # custom canonical URL (optional)
+  noindex: false # false (default) or true
+---
+
+**Authelia** imposes default rate limits on specific endpoints which can prevent faulty clients or bad actors from
+consuming too many resources or using brute-force to potentially compromise security. This should not be confused with
+[Regulation](../security/regulation.md) which is used to silently ban users from using the username / password form.
+
+## Configuration
+
+{{< config-alert-example >}}
+
+```yaml {title=configuration.yml}
+server:
+  endpoints:
+    rate_limits:
+      reset_password_start:
+        enable: true
+        ipv6_mask: 64
+        buckets:
+          - period: '10 minutes'
+            requests: 5
+          - period: '15 minutes'
+            requests: 10
+          - period: '30 minutes'
+            requests: 15
+      reset_password_finish:
+        enable: true
+        ipv6_mask: 64
+        buckets:
+          - period: '1 minute'
+            requests: 10
+          - period: '2 minutes'
+            requests: 15
+      second_factor_totp:
+        enable: true
+        ipv6_mask: 64
+        buckets:
+          - period: '1 minute'
+            requests: 30
+          - period: '2 minutes'
+            requests: 40
+          - period: '10 minutes'
+            requests: 50
+      second_factor_duo:
+        enable: true
+        ipv6_mask: 64
+        buckets:
+          - period: '1 minute'
+            requests: 10
+          - period: '2 minutes'
+            requests: 15
+      second_factor_recovery_code:
+        enable: true
+        buckets:
+          - period: '1 minute'
+            requests: 10
+          - period: '2 minutes'
+            requests: 15
+      session_elevation_start:
+        enable: true
+        ipv6_mask: 64
+        buckets:
+          - period: '5 minutes'
+            requests: 3
+          - period: '10 minutes'
+            requests: 5
+          - period: '1 hour'
+            requests: 15
+      session_elevation_finish:
+        enable: true
+        ipv6_mask: 64
+        buckets:
+          - period: '10 minutes'
+            requests: 3
+          - period: '20 minutes'
+            requests: 5
+          - period: '1 hour'
+            requests: 15
+      openid_connect_token:
+        enable: true
+        ipv6_mask: 64
+        buckets:
+          - period: '1 minute'
+            requests: 30
+          - period: '2 minutes'
+            requests: 40
+          - period: '10 minutes'
+            requests: 50
+          - period: '1 hour'
+            requests: 100
+      openid_connect_pushed_authorization_request:
+        enable: true
+        ipv6_mask: 64
+        buckets:
+          - period: '1 minute'
+            requests: 30
+          - period: '2 minutes'
+            requests: 40
+          - period: '10 minutes'
+            requests: 50
+          - period: '1 hour'
+            requests: 100
+      openid_connect_userinfo:
+        enable: true
+        ipv6_mask: 64
+        buckets:
+          - period: '1 minute'
+            requests: 30
+          - period: '2 minutes'
+            requests: 40
+          - period: '10 minutes'
+            requests: 50
+          - period: '1 hour'
+            requests: 100
+      openid_connect_introspection:
+        enable: true
+        ipv6_mask: 64
+        buckets:
+          - period: '1 minute'
+            requests: 30
+          - period: '2 minutes'
+            requests: 40
+          - period: '10 minutes'
+            requests: 50
+          - period: '1 hour'
+            requests: 100
+      openid_connect_revocation:
+        enable: true
+        ipv6_mask: 64
+        buckets:
+          - period: '1 minute'
+            requests: 30
+          - period: '2 minutes'
+            requests: 40
+          - period: '10 minutes'
+            requests: 50
+          - period: '1 hour'
+            requests: 100
+```
+
+## Common Options
+
+### enable
+
+{{< confkey type="boolean" default="true" required="no" >}}
+
+Enables the given rate limit configuration. These are enabled by default.
+
+### ipv6_mask
+
+{{< confkey type="integer" default="64" required="no" >}}
+
+The prefix length used to group IPv6 addresses when applying the rate limit. All IPv6 addresses which share the same
+prefix of this length are counted against the same rate limit. This value must be between `48` and `128`. IPv4
+addresses are always rate limited individually.
+
+As a single IPv6 subscriber is typically allocated at least a `/64` it's trivial for a client to rotate the address it
+uses within that allocation, which is why the default is `64`. Lowering this value to `56` or `48` can prevent clients
+from rotating addresses within larger allocations at the cost of potentially grouping more unrelated clients together.
+
+IPv4 addresses translated using the well-known `64:ff9b::/96` prefix are rate limited individually using the embedded
+IPv4 address. If a translator presents IPv4 clients using any other prefix then this value should be set to `128`,
+otherwise those clients may all be counted against the same rate limit.
+
+### buckets
+
+{{< confkey type="list(object)" required="no" >}}
+
+The list of individual buckets to consider for each request.
+
+#### period
+
+{{< confkey type="string,integer" syntax="duration" required="situational">}}
+
+Configures the period of time the tokenized bucket applies to.
+
+Required if the [buckets](#buckets) have a configuration and [enable](#enable) is true.
+
+#### requests
+
+{{< confkey type="integer" required="situational">}}
+
+Configures the number of requests the tokenized bucket applies to.
+
+Required if the [buckets](#buckets) have a configuration and [enable](#enable) is true.
+
+## Options
+
+### reset_password_start
+
+Configures the rate limiter which applies to the endpoint that initializes the reset password flow.
+
+See [Common Options](#common-options) for the individual options for this section.
+
+### reset_password_finish
+
+Configures the rate limiter which applies to endpoints which consume tokens for the reset password flow.
+
+See [Common Options](#common-options) for the individual options for this section.
+
+### second_factor_totp
+
+Configures the rate limiter which applies to the [TOTP](../second-factor/time-based-one-time-password.md) endpoint code
+submissions for the second factor flow.
+
+See [Common Options](#common-options) for the individual options for this section.
+
+### second_factor_duo
+
+Configures the rate limiter which applies to the [Duo / Mobile Push](../second-factor/duo.md) endpoint which initializes
+the application authorization flow for the second factor flow.
+
+See [Common Options](#common-options) for the individual options for this section.
+
+### second_factor_recovery_code
+
+Configures the rate limiter which applies to the [Recovery Codes](../second-factor/recovery-codes.md) endpoint code
+submissions for the second factor flow.
+
+See [Common Options](#common-options) for the individual options for this section.
+
+### session_elevation_start
+
+Configures the rate limiter which applies to the [Elevated Session](../identity-validation/elevated-session.md) endpoint
+which initializes the code generation and notification for the elevated session flow.
+
+See [Common Options](#common-options) for the individual options for this section.
+
+### session_elevation_finish
+
+Configures the rate limiter which applies to the [Elevated Session](../identity-validation/elevated-session.md) endpoint
+which consumes the code for the elevated session flow.
+
+See [Common Options](#common-options) for the individual options for this section.
+
+### openid_connect_token
+
+Configures the rate limiter which applies to the
+[OpenID Connect 1.0 Token Endpoint](../../integration/openid-connect/introduction.md#well-known-discovery-endpoints).
+
+See [Common Options](#common-options) for the individual options for this section.
+
+### openid_connect_pushed_authorization_request
+
+Configures the rate limiter which applies to the
+[OpenID Connect 1.0 Pushed Authorization Request Endpoint](../../integration/openid-connect/introduction.md#well-known-discovery-endpoints).
+
+See [Common Options](#common-options) for the individual options for this section.
+
+### openid_connect_userinfo
+
+Configures the rate limiter which applies to the
+[OpenID Connect 1.0 UserInfo Endpoint](../../integration/openid-connect/introduction.md#discoverable-endpoints).
+
+See [Common Options](#common-options) for the individual options for this section.
+
+### openid_connect_introspection
+
+Configures the rate limiter which applies to the
+[OpenID Connect 1.0 Introspection Endpoint](../../integration/openid-connect/introduction.md#discoverable-endpoints).
+
+See [Common Options](#common-options) for the individual options for this section.
+
+### openid_connect_revocation
+
+Configures the rate limiter which applies to the
+[OpenID Connect 1.0 Revocation Endpoint](../../integration/openid-connect/introduction.md#discoverable-endpoints).
+
+See [Common Options](#common-options) for the individual options for this section.

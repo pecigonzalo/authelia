@@ -1,18 +1,20 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"io/fs"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
+	"github.com/valyala/fasthttp"
+	"go.yaml.in/yaml/v4"
 )
 
 func newDocsDateCmd() *cobra.Command {
@@ -24,7 +26,7 @@ func newDocsDateCmd() *cobra.Command {
 		DisableAutoGenTag: true,
 	}
 
-	cmd.Flags().String("commit-until", "HEAD", "The commit to check the logs until")
+	cmd.Flags().String("commit-until", fasthttp.MethodHead, "The commit to check the logs until")
 	cmd.Flags().String("commit-since", "", "The commit to check the logs since")
 
 	return cmd
@@ -86,7 +88,17 @@ func docsDateRunE(cmd *cobra.Command, args []string) (err error) {
 		)
 
 		if value, ok := frontmatter["date"]; ok {
-			date = value.(time.Time)
+			date, ok = value.(time.Time)
+
+			if !ok {
+				var abspath string
+
+				if abspath, err = filepath.Abs(path); err != nil {
+					abspath = path
+				}
+
+				return fmt.Errorf("frontmatter for %s has an invalid date value: is %T with a value of %s", abspath, value, value)
+			}
 		}
 
 		dateGit := getDateFromGit(cwd, abs, commitFilter)
@@ -112,7 +124,7 @@ func getDateFromGit(cwd, path, commitFilter string) *time.Time {
 		args = append(args, commitFilter)
 	}
 
-	args = append(args, "-1", "--follow", "--diff-filter=A", "--pretty=format:%cD", "--", path)
+	args = append(args, "-1", "--diff-filter=A", "--pretty=format:%cD", "--", path)
 
 	return getTimeFromGitCmd(exec.Command("git", args...))
 }
@@ -123,7 +135,6 @@ func getTimeFromGitCmd(cmd *exec.Cmd) *time.Time {
 		err    error
 		t      time.Time
 	)
-
 	if output, err = cmd.Output(); err != nil {
 		return nil
 	}
@@ -136,15 +147,6 @@ func getTimeFromGitCmd(cmd *exec.Cmd) *time.Time {
 }
 
 func replaceDates(path string, date time.Time, dateGit *time.Time) {
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-
-	buf := bytes.Buffer{}
-
-	scanner := bufio.NewScanner(f)
-
 	var dateGitLine string
 
 	dateLine := fmt.Sprintf("date: %s", date.Format(dateFmtYAML))
@@ -155,67 +157,5 @@ func replaceDates(path string, date time.Time, dateGit *time.Time) {
 		dateGitLine = dateLine
 	}
 
-	found := 0
-
-	frontmatter := 0
-
-	for scanner.Scan() {
-		if found < 2 && frontmatter < 2 {
-			switch {
-			case scanner.Text() == delimiterLineFrontMatter:
-				buf.Write(scanner.Bytes())
-				frontmatter++
-			case frontmatter != 0 && strings.HasPrefix(scanner.Text(), "date: "):
-				buf.WriteString(dateGitLine)
-				found++
-			default:
-				buf.Write(scanner.Bytes())
-			}
-		} else {
-			buf.Write(scanner.Bytes())
-		}
-
-		buf.Write(newline)
-	}
-
-	f.Close()
-
-	newF, err := os.Create(path)
-	if err != nil {
-		return
-	}
-
-	_, _ = buf.WriteTo(newF)
-
-	newF.Close()
-}
-
-func getFrontmatter(path string) []byte {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-
-	var start bool
-
-	buf := bytes.Buffer{}
-
-	for scanner.Scan() {
-		if start {
-			if scanner.Text() == delimiterLineFrontMatter {
-				break
-			}
-
-			buf.Write(scanner.Bytes())
-			buf.Write(newline)
-		} else if scanner.Text() == delimiterLineFrontMatter {
-			start = true
-		}
-	}
-
-	return buf.Bytes()
+	replaceFrontMatter(path, dateLine, dateGitLine, "date: ")
 }

@@ -1,7 +1,12 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package middlewares
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/valyala/fasthttp"
@@ -22,9 +27,34 @@ func NewMetricsRequest(metrics metrics.Recorder) (middleware Basic) {
 			next(ctx)
 
 			statusCode := strconv.Itoa(ctx.Response.StatusCode())
-			requestMethod := string(ctx.Method())
+			requestMethod := formatRequestMethod(string(ctx.Method()))
 
-			metrics.RecordRequest(statusCode, requestMethod, time.Since(started))
+			if requestMethod == "" {
+				metrics.RecordRequest(statusCode, "UNKNOWN", time.Since(started))
+			} else {
+				metrics.RecordRequest(statusCode, requestMethod, time.Since(started))
+			}
+		}
+	}
+}
+
+// NewMetricsRequestOpenIDConnect returns a middleware if provided with a metrics.Recorder, otherwise it returns nil.
+func NewMetricsRequestOpenIDConnect(metrics metrics.Recorder, endpoint string) (middleware Basic) {
+	if metrics == nil {
+		return nil
+	}
+
+	endpoint = strings.ReplaceAll(endpoint, "-", "_")
+
+	return func(next fasthttp.RequestHandler) (handler fasthttp.RequestHandler) {
+		return func(ctx *fasthttp.RequestCtx) {
+			started := time.Now()
+
+			next(ctx)
+
+			statusCode := strconv.Itoa(ctx.Response.StatusCode())
+
+			metrics.RecordRequestOpenIDConnect(endpoint, statusCode, time.Since(started))
 		}
 	}
 }

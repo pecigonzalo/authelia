@@ -1,13 +1,17 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package middlewares
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net/mail"
-	"path"
+	"net/url"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/authelia/authelia/v4/internal/model"
@@ -15,23 +19,41 @@ import (
 )
 
 // IdentityVerificationStart the handler for initiating the identity validation process.
-func IdentityVerificationStart(args IdentityVerificationStartArgs, delayFunc TimingAttackDelayFunc) RequestHandler {
+func IdentityVerificationStart(args IdentityVerificationStartArgs, delayer Delayer) RequestHandler {
 	if args.IdentityRetrieverFunc == nil {
-		panic(fmt.Errorf("Identity verification requires an identity retriever"))
+		panic(fmt.Errorf("identity verification requires an identity retriever"))
 	}
 
 	return func(ctx *AutheliaCtx) {
+		var (
+			issuerURL *url.URL
+			err       error
+		)
+		if issuerURL, err = ctx.IssuerURL(); err != nil {
+			ctx.GetLogger().WithError(err).Error("Error occurred determining issuer for identity verification")
+			ctx.SetJSONError(messageOperationFailed)
+
+			return
+		}
+
+		if err = ctx.RegenerateSession(); err != nil {
+			ctx.GetLogger().WithError(err).Error("Error occurred regenerating user session")
+			ctx.SetJSONError(messageOperationFailed)
+
+			return
+		}
+
 		requestTime := time.Now()
 		success := false
 
-		if delayFunc != nil {
-			defer delayFunc(ctx, requestTime, &success)
+		if delayer != nil {
+			defer delayer.Delay(ctx, requestTime, &success)
 		}
 
 		identity, err := args.IdentityRetrieverFunc(ctx)
 		if err != nil {
 			// In that case we reply ok to avoid user enumeration.
-			ctx.Logger.Error(err)
+			ctx.GetLogger().Error(err)
 			ctx.ReplyOK()
 
 			return
@@ -40,52 +62,93 @@ func IdentityVerificationStart(args IdentityVerificationStartArgs, delayFunc Tim
 		var jti uuid.UUID
 
 		if jti, err = uuid.NewRandom(); err != nil {
-			ctx.Error(err, messageOperationFailed)
+			ctx.GetLogger().WithError(err).Error("Error occurred generating UUIDv4 jti for identity verification")
+			ctx.SetJSONError(messageOperationFailed)
+
 			return
 		}
 
-		verification := model.NewIdentityVerification(jti, identity.Username, args.ActionClaim, ctx.RemoteIP())
+		verification := model.NewIdentityVerification(jti, identity.Username, args.ActionClaim, ctx.RemoteIP(), ctx.Configuration.IdentityValidation.ResetPassword.JWTExpiration)
 
 		// Create the claim with the action to sign it.
-		claims := verification.ToIdentityVerificationClaim()
+		claims := verification.ToIdentityVerificationClaim(issuerURL)
 
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		var method *jwt.SigningMethodHMAC
 
-		signedToken, err := token.SignedString([]byte(ctx.Configuration.JWTSecret))
+		switch ctx.Configuration.IdentityValidation.ResetPassword.JWTAlgorithm {
+		case "HS256":
+			method = jwt.SigningMethodHS256
+		case "HS384":
+			method = jwt.SigningMethodHS384
+		case "HS512":
+			method = jwt.SigningMethodHS512
+		default:
+			method = jwt.SigningMethodHS256
+		}
+
+		token := jwt.NewWithClaims(method, claims)
+
+		signedToken, err := token.SignedString([]byte(ctx.Configuration.IdentityValidation.ResetPassword.JWTSecret))
 		if err != nil {
-			ctx.Error(err, messageOperationFailed)
+			ctx.GetLogger().WithError(err).Error("Error occurred signing the identity verification token")
+			ctx.SetJSONError(messageOperationFailed)
+
 			return
 		}
 
 		if err = ctx.Providers.StorageProvider.SaveIdentityVerification(ctx, verification); err != nil {
-			ctx.Error(err, messageOperationFailed)
+			ctx.GetLogger().WithError(err).Error("Error occurred saving the identity verification")
+			ctx.SetJSONError(messageOperationFailed)
+
 			return
 		}
 
-		linkURL := ctx.RootURL()
+		linkURL := &url.URL{
+			Scheme: issuerURL.Scheme,
+			Host:   issuerURL.Host,
+			Path:   issuerURL.Path,
+		}
 
 		query := linkURL.Query()
 
 		query.Set(queryArgToken, signedToken)
 
-		linkURL.Path = path.Join(linkURL.Path, args.TargetEndpoint)
 		linkURL.RawQuery = query.Encode()
+		linkURL = linkURL.JoinPath(args.TargetEndpoint)
 
-		data := templates.EmailIdentityVerificationValues{
-			Title:       args.MailTitle,
-			LinkURL:     linkURL.String(),
-			LinkText:    args.MailButtonContent,
-			DisplayName: identity.DisplayName,
-			RemoteIP:    ctx.RemoteIP().String(),
+		revocationLinkURL := &url.URL{
+			Scheme: issuerURL.Scheme,
+			Host:   issuerURL.Host,
+			Path:   issuerURL.Path,
 		}
 
-		ctx.Logger.Debugf("Sending an email to user %s (%s) to confirm identity for registering a device.",
+		query = revocationLinkURL.Query()
+
+		query.Set(queryArgToken, signedToken)
+
+		revocationLinkURL.RawQuery = query.Encode()
+		revocationLinkURL = revocationLinkURL.JoinPath(args.RevokeEndpoint)
+
+		domain, _ := ctx.GetCookieDomain()
+
+		data := templates.EmailIdentityVerificationJWTValues{
+			Title:              args.MailTitle,
+			LinkURL:            linkURL.String(),
+			LinkText:           args.MailButtonContent,
+			RevocationLinkURL:  revocationLinkURL.String(),
+			RevocationLinkText: args.MailButtonRevokeContent,
+			DisplayName:        identity.DisplayName,
+			Domain:             domain,
+			RemoteIP:           ctx.RemoteIP().String(),
+		}
+
+		ctx.GetLogger().Debugf("Sending an email to user %s (%s) to confirm identity for registering a device.",
 			identity.Username, identity.Email)
 
-		recipient := mail.Address{Name: identity.DisplayName, Address: identity.Email}
+		if err = ctx.Providers.Notifier.Send(ctx, identity.Address(), args.MailTitle, ctx.Providers.Templates.GetIdentityVerificationJWTEmailTemplate(), data); err != nil {
+			ctx.GetLogger().WithError(err).Error("Error occurred sending the identity verification email")
+			ctx.SetJSONError(messageOperationFailed)
 
-		if err = ctx.Providers.Notifier.Send(ctx, recipient, args.MailTitle, ctx.Providers.Templates.GetIdentityVerificationEmailTemplate(), data); err != nil {
-			ctx.Error(err, messageOperationFailed)
 			return
 		}
 
@@ -96,6 +159,8 @@ func IdentityVerificationStart(args IdentityVerificationStartArgs, delayFunc Tim
 }
 
 // IdentityVerificationFinish the middleware for finishing the identity validation process.
+//
+//nolint:gocyclo
 func IdentityVerificationFinish(args IdentityVerificationFinishArgs, next func(ctx *AutheliaCtx, username string)) RequestHandler {
 	return func(ctx *AutheliaCtx) {
 		var finishBody IdentityVerificationFinishBody
@@ -103,82 +168,127 @@ func IdentityVerificationFinish(args IdentityVerificationFinishArgs, next func(c
 		b := ctx.PostBody()
 
 		err := json.Unmarshal(b, &finishBody)
-
 		if err != nil {
-			ctx.Error(err, messageOperationFailed)
+			ctx.GetLogger().WithError(err).Error("Error occurred parsing the identity verification request")
+			ctx.SetJSONError(messageOperationFailed)
+
 			return
 		}
 
 		if finishBody.Token == "" {
-			ctx.Error(fmt.Errorf("No token provided"), messageOperationFailed)
+			ctx.GetLogger().Error("No token was provided for identity verification")
+			ctx.SetJSONError(messageOperationFailed)
+
+			return
+		}
+
+		var issuerURL *url.URL
+
+		if issuerURL, err = ctx.IssuerURL(); err != nil {
+			ctx.GetLogger().WithError(err).Error("Error occurred determining the issuer")
+			ctx.SetJSONError(messageOperationFailed)
+
 			return
 		}
 
 		token, err := jwt.ParseWithClaims(finishBody.Token, &model.IdentityVerificationClaim{},
 			func(token *jwt.Token) (any, error) {
-				return []byte(ctx.Configuration.JWTSecret), nil
-			})
+				return []byte(ctx.Configuration.IdentityValidation.ResetPassword.JWTSecret), nil
+			},
+			jwt.WithIssuedAt(),
+			jwt.WithStrictDecoding(),
+			jwt.WithIssuer(issuerURL.String()),
+			jwt.WithValidMethods([]string{ctx.Configuration.IdentityValidation.ResetPassword.JWTAlgorithm}),
+			ctx.GetClock().GetJWTWithTimeFuncOption(),
+		)
 
-		if err != nil {
-			if ve, ok := err.(*jwt.ValidationError); ok {
-				switch {
-				case ve.Errors&jwt.ValidationErrorMalformed != 0:
-					ctx.Error(fmt.Errorf("Cannot parse token"), messageOperationFailed)
-					return
-				case ve.Errors&(jwt.ValidationErrorExpired|jwt.ValidationErrorNotValidYet) != 0:
-					// Token is either expired or not active yet.
-					ctx.Error(fmt.Errorf("Token expired"), messageIdentityVerificationTokenHasExpired)
-					return
-				default:
-					ctx.Error(fmt.Errorf("Cannot handle this token: %s", ve), messageOperationFailed)
-					return
-				}
-			}
+		switch {
+		case err == nil:
+			break
+		case errors.Is(err, jwt.ErrTokenMalformed):
+			ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token as it appears to be malformed, this potentially can occur if you've not copied the full link")
+			ctx.SetJSONError(messageOperationFailed)
 
-			ctx.Error(err, messageOperationFailed)
+			return
+		case errors.Is(err, jwt.ErrTokenExpired):
+			ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token validity period as it appears to be expired")
+			ctx.SetJSONError(messageIdentityVerificationTokenHasExpired)
+
+			return
+		case errors.Is(err, jwt.ErrTokenNotValidYet):
+			ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token validity period as it appears to only be valid in the future")
+			ctx.SetJSONError(messageIdentityVerificationTokenNotValidYet)
+
+			return
+		case errors.Is(err, jwt.ErrTokenSignatureInvalid):
+			ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token signature")
+			ctx.SetJSONError(messageIdentityVerificationTokenSig)
+
+			return
+		default:
+			ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token")
+			ctx.SetJSONError(messageOperationFailed)
 
 			return
 		}
 
 		claims, ok := token.Claims.(*model.IdentityVerificationClaim)
 		if !ok {
-			ctx.Error(fmt.Errorf("Wrong type of claims (%T != *middlewares.IdentityVerificationClaim)", claims), messageOperationFailed)
+			ctx.GetLogger().WithError(fmt.Errorf("failed to map the %T claims to a *model.IdentityVerificationClaim", claims)).Error("Error occurred validating the identity verification token claims")
+			ctx.SetJSONError(messageOperationFailed)
+
 			return
 		}
 
 		verification, err := claims.ToIdentityVerification()
 		if err != nil {
-			ctx.Error(fmt.Errorf("Token seems to be invalid: %w", err),
-				messageOperationFailed)
+			ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token claims as they appear to be malformed")
+			ctx.SetJSONError(messageOperationFailed)
+
 			return
 		}
 
 		found, err := ctx.Providers.StorageProvider.FindIdentityVerification(ctx, verification.JTI.String())
 		if err != nil {
-			ctx.Error(err, messageOperationFailed)
+			ctx.GetLogger().WithError(err).Error("Error occurred looking up identity verification during the validation phase")
+			ctx.SetJSONError(messageOperationFailed)
+
 			return
 		}
 
 		if !found {
-			ctx.Error(fmt.Errorf("Token is not in DB, it might have already been used"),
-				messageIdentityVerificationTokenAlreadyUsed)
+			ctx.GetLogger().Error("Error occurred looking up identity verification during the validation phase, the token was not found in the database which could indicate it was never generated or was already used")
+			ctx.SetJSONError(messageIdentityVerificationTokenAlreadyUsed)
+
 			return
 		}
 
 		// Verify that the action claim in the token is the one expected for the given endpoint.
 		if claims.Action != args.ActionClaim {
-			ctx.Error(fmt.Errorf("This token has not been generated for this kind of action"), messageOperationFailed)
+			ctx.GetLogger().Errorf("Error occurred handling the identity verification token, the token action '%s' does not match the endpoint action '%s' which is not allowed", claims.Action, args.ActionClaim)
+			ctx.SetJSONError(messageOperationFailed)
+
 			return
 		}
 
 		if args.IsTokenUserValidFunc != nil && !args.IsTokenUserValidFunc(ctx, claims.Username) {
-			ctx.Error(fmt.Errorf("This token has not been generated for this user"), messageOperationFailed)
+			ctx.GetLogger().Errorf("Error occurred handling the identity verification token, the user is not allowed to use this token")
+			ctx.SetJSONError(messageOperationFailed)
+
 			return
 		}
 
-		err = ctx.Providers.StorageProvider.ConsumeIdentityVerification(ctx, claims.ID, model.NewNullIP(ctx.RemoteIP()))
-		if err != nil {
-			ctx.Error(err, messageOperationFailed)
+		if err = ctx.RegenerateSession(); err != nil {
+			ctx.GetLogger().WithError(err).Error("Unable to regenerate session during identity verification")
+			ctx.SetJSONError(messageOperationFailed)
+
+			return
+		}
+
+		if err = ctx.Providers.StorageProvider.ConsumeIdentityVerification(ctx, claims.ID, model.NewNullIP(ctx.RemoteIP())); err != nil {
+			ctx.GetLogger().WithError(err).Error("Error occurred consuming the identity verification during the validation phase")
+			ctx.SetJSONError(messageOperationFailed)
+
 			return
 		}
 

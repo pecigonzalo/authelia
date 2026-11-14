@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -6,9 +10,7 @@ import (
 	"github.com/go-rod/rod"
 )
 
-func (rs *RodSession) doRegisterThenLogout(t *testing.T, page *rod.Page, username, password string) string {
-	secret := rs.doLoginAndRegisterTOTP(t, page, username, password, false)
+func (rs *RodSession) doLoginAndRegisterTOTPThenLogout(t *testing.T, page *rod.Page, username, password string) {
+	rs.doLoginAndRegisterTOTP(t, page, username, password, false)
 	rs.doLogout(t, page)
-
-	return secret
 }

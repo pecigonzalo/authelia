@@ -1,11 +1,19 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package authentication
 
 import (
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
-	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-ldap/ldap/v3"
+
+	"github.com/authelia/authelia/v4/internal/configuration/schema"
+	"github.com/authelia/authelia/v4/internal/utils"
 )
 
 func ldapEntriesContainsEntry(needle *ldap.Entry, haystack []*ldap.Entry) bool {
@@ -22,85 +30,244 @@ func ldapEntriesContainsEntry(needle *ldap.Entry, haystack []*ldap.Entry) bool {
 	return false
 }
 
-func ldapGetFeatureSupportFromEntry(entry *ldap.Entry) (controlTypeOIDs, extensionOIDs []string, features LDAPSupportedFeatures) {
-	if entry == nil {
-		return controlTypeOIDs, extensionOIDs, features
+func ldapGetFeatureSupportFromClient(client LDAPBaseClient) (discovery LDAPDiscovery, err error) {
+	var (
+		request *ldap.SearchRequest
+		result  *ldap.SearchResult
+	)
+
+	request = ldapNewSearchRequestRootDSE()
+
+	if result, err = client.Search(request); err != nil {
+		return discovery, fmt.Errorf("error occurred during RootDSE search: %w", err)
 	}
+
+	if result == nil || len(result.Entries) != 1 {
+		return discovery, fmt.Errorf("error occurred during RootDSE search: %w", ErrLDAPHealthCheckFailedEntryCount)
+	}
+
+	return ldapGetDiscoveryFromLDAPEntry(result.Entries[0]), nil
+}
+
+func ldapGetDiscoveryFromLDAPEntry(entry *ldap.Entry) (discovery LDAPDiscovery) {
+	if entry == nil {
+		return
+	}
+
+	discovery.Successful = true
+
+	var fallbackVendorName string
 
 	for _, attr := range entry.Attributes {
 		switch attr.Name {
+		case ldapObjectClassAttribute:
+			if utils.IsStringInSliceFold(ldapVendorOpenLDAPObjectClass, attr.Values) {
+				fallbackVendorName = ldapVendorNameOpenLDAP
+			}
+		case ldapSupportedLDAPVersionAttribute:
+			discovery.LDAPVersion = ldapGetLDAPVersionDiscoveryFromLDAPEntry(attr)
 		case ldapSupportedControlAttribute:
-			controlTypeOIDs = attr.Values
-
-			for _, oid := range attr.Values {
-				switch oid {
-				case ldapOIDControlMsftServerPolicyHints:
-					features.ControlTypes.MsftPwdPolHints = true
-				case ldapOIDControlMsftServerPolicyHintsDeprecated:
-					features.ControlTypes.MsftPwdPolHintsDeprecated = true
-				}
-			}
+			ldapGetControlsDiscoveryFromLDAPEntry(attr, &discovery.Controls)
 		case ldapSupportedExtensionAttribute:
-			extensionOIDs = attr.Values
-
-			for _, oid := range attr.Values {
-				switch oid {
-				case ldapOIDExtensionPwdModifyExOp:
-					features.Extensions.PwdModifyExOp = true
-				case ldapOIDExtensionTLS:
-					features.Extensions.TLS = true
-				}
-			}
+			ldapGetExtensionDiscoveryFromLDAPEntry(attr, &discovery.Extensions)
+		case ldapSupportedSASLMechanismsAttribute:
+			discovery.SASLMechanisms = attr.Values
+		case ldapSupportedFeaturesAttribute:
+			discovery.Features.OIDs = attr.Values
+		case ldapVendorNameAttribute:
+			discovery.Vendor.Name = strings.Join(attr.Values, " ")
+		case ldapVendorVersionAttribute:
+			discovery.Vendor.Version = strings.Join(attr.Values, " ")
+		case ldapDomainFunctionalityAttribute:
+			ldapGetFunctionalityDiscoveryFromLDAPEntry(attr, &fallbackVendorName, &discovery.Vendor.DomainFunctionalLevel)
+		case ldapForestFunctionalityAttribute:
+			ldapGetFunctionalityDiscoveryFromLDAPEntry(attr, &fallbackVendorName, &discovery.Vendor.ForestFunctionalLevel)
 		}
 	}
 
-	return controlTypeOIDs, extensionOIDs, features
+	if discovery.Vendor.Name == "" {
+		discovery.Vendor.Name = fallbackVendorName
+	}
+
+	return discovery
 }
 
-func ldapEscape(inputUsername string) string {
-	inputUsername = ldap.EscapeFilter(inputUsername)
-	for _, c := range specialLDAPRunes {
-		inputUsername = strings.ReplaceAll(inputUsername, string(c), fmt.Sprintf("\\%c", c))
+func ldapGetFunctionalityDiscoveryFromLDAPEntry(attr *ldap.EntryAttribute, fallback *string, out *int) {
+	if len(attr.Values) != 1 {
+		return
 	}
 
-	return inputUsername
+	value, err := strconv.Atoi(attr.Values[0])
+	if err != nil {
+		return
+	}
+
+	*fallback = ldapVendorNameMicrosoftCorporation
+	*out = value
 }
 
-func ldapGetReferral(err error) (referral string, ok bool) {
-	if !ldap.IsErrorWithCode(err, ldap.LDAPResultReferral) {
-		return "", false
+func ldapGetLDAPVersionDiscoveryFromLDAPEntry(attr *ldap.EntryAttribute) (versions []int) {
+	versions = make([]int, 0, len(attr.Values))
+
+	for _, v := range attr.Values {
+		version, err := strconv.Atoi(v)
+		if err != nil {
+			break
+		}
+
+		versions = append(versions, version)
 	}
 
-	switch e := err.(type) {
-	case *ldap.Error:
-		if e.Packet == nil {
-			return "", false
+	if len(versions) != len(attr.Values) {
+		return nil
+	}
+
+	return versions
+}
+
+func ldapGetControlsDiscoveryFromLDAPEntry(attr *ldap.EntryAttribute, controls *LDAPDiscoveryControls) {
+	controls.OIDs = attr.Values
+
+	for _, oid := range attr.Values {
+		switch oid {
+		case ldapOIDControlMsftServerPolicyHints:
+			controls.MsftPwdPolHints = true
+		case ldapOIDControlMsftServerPolicyHintsDeprecated:
+			controls.MsftPwdPolHintsDeprecated = true
+		}
+	}
+}
+
+func ldapGetExtensionDiscoveryFromLDAPEntry(attr *ldap.EntryAttribute, extensions *LDAPDiscoveryExtensions) {
+	extensions.OIDs = attr.Values
+
+	for _, oid := range attr.Values {
+		switch oid {
+		case ldapOIDExtensionPwdModify:
+			extensions.PwdModify = true
+		case ldapOIDExtensionTLS:
+			extensions.TLS = true
+		case ldapOIDExtensionWhoAmI:
+			extensions.WhoAmI = true
+		}
+	}
+}
+
+func getLDAPResultCode(err error) int {
+	var e *ldap.Error
+	if errors.As(err, &e) {
+		return int(e.ResultCode)
+	}
+
+	return -1
+}
+
+func getValueFromEntry(entry *ldap.Entry, attribute string) string {
+	if attribute == "" {
+		return ""
+	}
+
+	return entry.GetAttributeValue(attribute)
+}
+
+func getValuesFromEntry(entry *ldap.Entry, attribute string) []string {
+	if attribute == "" {
+		return nil
+	}
+
+	return entry.GetAttributeValues(attribute)
+}
+
+func getExtraValueFromEntry(entry *ldap.Entry, attribute string, properties schema.AuthenticationBackendLDAPAttributesAttribute) (value any, err error) {
+	if properties.MultiValued {
+		return getExtraValueMultiFromEntry(entry, attribute, properties)
+	}
+
+	str := getValueFromEntry(entry, attribute)
+
+	switch properties.ValueType {
+	case ValueTypeString:
+		value = str
+	case ValueTypeInteger:
+		if str == "" {
+			return nil, nil
 		}
 
-		if len(e.Packet.Children) < 2 {
-			return "", false
+		if value, err = strconv.ParseFloat(str, 64); err != nil {
+			return nil, fmt.Errorf("cannot parse '%s' with value '%s' as integer: %w", attribute, str, err)
+		}
+	case ValueTypeBoolean:
+		if str == "" {
+			return nil, nil
 		}
 
-		if e.Packet.Children[1].Tag != ber.TagObjectDescriptor {
-			return "", false
+		if value, err = strconv.ParseBool(str); err != nil {
+			return nil, fmt.Errorf("cannot parse '%s' with value '%s' as boolean: %w", attribute, str, err)
 		}
+	}
 
-		for i := 0; i < len(e.Packet.Children[1].Children); i++ {
-			if e.Packet.Children[1].Children[i].Tag != ber.TagBitString || len(e.Packet.Children[1].Children[i].Children) < 1 {
-				continue
+	return value, nil
+}
+
+func getExtraValueMultiFromEntry(entry *ldap.Entry, attribute string, properties schema.AuthenticationBackendLDAPAttributesAttribute) (value any, err error) {
+	if entry == nil {
+		return nil, fmt.Errorf("failed to get values from nil entry for attribute '%s'", attribute)
+	}
+
+	strs := getValuesFromEntry(entry, attribute)
+
+	values := make([]any, len(strs))
+
+	switch properties.GetValueType() {
+	case ValueTypeString:
+		for i, v := range strs {
+			values[i] = v
+		}
+	case ValueTypeInteger:
+		var v float64
+
+		for i, str := range strs {
+			if v, err = strconv.ParseFloat(str, 64); err != nil {
+				return nil, fmt.Errorf("cannot parse '%s' with value '%s' as integer: %w", attribute, str, err)
 			}
 
-			referral, ok = e.Packet.Children[1].Children[i].Children[0].Value.(string)
+			values[i] = v
+		}
+	case ValueTypeBoolean:
+		var v bool
 
-			if !ok {
-				continue
+		for i, str := range strs {
+			if v, err = strconv.ParseBool(str); err != nil {
+				return nil, fmt.Errorf("cannot parse '%s' with value '%s' as boolean: %w", attribute, str, err)
 			}
 
-			return referral, true
+			values[i] = v
 		}
+	}
 
-		return "", false
+	return values, nil
+}
+
+func ldapNewSearchRequestRootDSE() *ldap.SearchRequest {
+	return ldap.NewSearchRequest("", ldap.ScopeBaseObject, ldap.NeverDerefAliases,
+		1, 0, false, ldapBaseObjectFilter, []string{ldapObjectClassAttribute, ldapSupportedLDAPVersionAttribute, ldapSupportedExtensionAttribute, ldapSupportedControlAttribute, ldapSupportedFeaturesAttribute, ldapSupportedSASLMechanismsAttribute, ldapVendorNameAttribute, ldapVendorVersionAttribute, ldapDomainFunctionalityAttribute, ldapForestFunctionalityAttribute}, nil)
+}
+
+func fmtLDAPVersions(versions []int) string {
+	n := len(versions)
+
+	switch n {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("LDAPv%d", versions[0])
 	default:
-		return "", false
+		parts := make([]string, n)
+
+		for i, v := range versions {
+			parts[i] = fmt.Sprintf("LDAPv%d", v)
+		}
+
+		return strings.Join(parts[:n-1], ", ") + ", and " + parts[n-1]
 	}
 }

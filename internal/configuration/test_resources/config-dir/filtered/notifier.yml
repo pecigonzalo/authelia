@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+---
+notifier:
+  smtp:
+    username: 'test'
+    address: 'smtp://{{ env "SERVICES_SERVER" }}:1025'
+    sender: 'admin@{{ env "ROOT_DOMAIN" }}'
+    disable_require_tls: true
+...

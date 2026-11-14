@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -12,8 +16,6 @@ import (
 
 type DefaultRedirectionURLScenario struct {
 	*RodSuite
-
-	secret string
 }
 
 func NewDefaultRedirectionURLScenario() *DefaultRedirectionURLScenario {
@@ -23,8 +25,7 @@ func NewDefaultRedirectionURLScenario() *DefaultRedirectionURLScenario {
 }
 
 func (s *DefaultRedirectionURLScenario) SetupSuite() {
-	browser, err := StartRod()
-
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -32,6 +33,7 @@ func (s *DefaultRedirectionURLScenario) SetupSuite() {
 	s.RodSession = browser
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -41,20 +43,18 @@ func (s *DefaultRedirectionURLScenario) SetupSuite() {
 	}()
 
 	s.Page = s.doCreateTab(s.T(), HomeBaseURL)
-	s.secret = s.doLoginAndRegisterTOTP(s.T(), s.Context(ctx), "john", "password", false)
+	s.doLoginAndRegisterTOTP(s.T(), s.Context(ctx), "john", "password", false)
 }
 
 func (s *DefaultRedirectionURLScenario) TearDownSuite() {
-	err := s.RodSession.Stop()
-
+	err := s.Stop()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
 func (s *DefaultRedirectionURLScenario) SetupTest() {
-	s.Page = s.doCreateTab(s.T(), HomeBaseURL)
-	s.verifyIsHome(s.T(), s.Page)
+	s.doSetupTest(HomeBaseURL)
 }
 
 func (s *DefaultRedirectionURLScenario) TearDownTest() {
@@ -64,6 +64,7 @@ func (s *DefaultRedirectionURLScenario) TearDownTest() {
 
 func (s *DefaultRedirectionURLScenario) TestUserIsRedirectedToDefaultURL() {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -71,11 +72,11 @@ func (s *DefaultRedirectionURLScenario) TestUserIsRedirectedToDefaultURL() {
 
 	targetURL := fmt.Sprintf("%s/secret.html", AdminBaseURL)
 
-	s.doLoginTwoFactor(s.T(), s.Context(ctx), "john", "password", false, s.secret, targetURL)
+	s.doLoginSecondFactorTOTP(s.T(), s.Context(ctx), "john", "password", false, targetURL)
 	s.verifySecretAuthorized(s.T(), s.Context(ctx))
 	s.doLogout(s.T(), s.Context(ctx))
 
-	s.doLoginTwoFactor(s.T(), s.Context(ctx), "john", "password", false, s.secret, "")
+	s.doLoginSecondFactorTOTP(s.T(), s.Context(ctx), "john", "password", false, "")
 	s.verifyIsHome(s.T(), s.Page)
 }
 

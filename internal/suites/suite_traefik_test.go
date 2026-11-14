@@ -1,7 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
-	"testing"
+	"context"
+	"fmt"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 )
@@ -10,32 +16,69 @@ type TraefikSuite struct {
 	*RodSuite
 }
 
-func NewTraefikSuite() *TraefikSuite {
+func NewTraefikSuite(name string) *TraefikSuite {
 	return &TraefikSuite{
-		RodSuite: NewRodSuite(traefikSuiteName),
+		RodSuite: NewRodSuite(name),
 	}
+}
+
+func (s *TraefikSuite) dockerEnvironment() *DockerEnvironment {
+	if s.Name == traefik2SuiteName {
+		return traefik2DockerEnvironment
+	}
+
+	return traefik3DockerEnvironment
 }
 
 func (s *TraefikSuite) Test1FAScenario() {
 	suite.Run(s.T(), New1FAScenario())
 }
 
-func (s *TraefikSuite) Test2FAScenario() {
-	suite.Run(s.T(), New2FAScenario())
+func (s *TraefikSuite) TestAccessDeniedScenario() {
+	suite.Run(s.T(), NewAccessDeniedScenario())
 }
 
-func (s *TraefikSuite) TestRedirectionURLScenario() {
-	suite.Run(s.T(), NewRedirectionURLScenario())
+func (s *TraefikSuite) Test2FATOTPScenario() {
+	suite.Run(s.T(), New2FATOTPScenario())
 }
 
 func (s *TraefikSuite) TestCustomHeaders() {
 	suite.Run(s.T(), NewCustomHeadersScenario())
 }
 
-func TestTraefikSuite(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping suite test in short mode")
-	}
+func (s *TraefikSuite) TestResetPasswordScenario() {
+	suite.Run(s.T(), NewResetPasswordScenario())
+}
 
-	suite.Run(t, NewTraefikSuite())
+func (s *TraefikSuite) TestShouldKeepSessionAfterRedisRestart() {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+
+	defer func() {
+		cancel()
+		s.collectCoverage(s.Page)
+		s.collectScreenshot(ctx.Err(), s.Page)
+		s.MustClose()
+		err := s.Stop()
+		s.Require().NoError(err)
+	}()
+
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
+	s.Require().NoError(err)
+	s.RodSession = browser
+
+	s.doSetupTest(HomeBaseURL)
+	s.doLoginAndRegisterTOTPThenLogout(s.T(), s.Context(ctx), "john", "password")
+
+	s.doLoginSecondFactorTOTP(s.T(), s.Context(ctx), "john", "password", false, "")
+
+	s.doVisit(s.T(), s.Context(ctx), fmt.Sprintf("%s/secret.html", SecureBaseURL))
+	s.verifySecretAuthorized(s.T(), s.Context(ctx))
+
+	err = s.dockerEnvironment().Restart("redis")
+	s.Require().NoError(err)
+
+	doWithDisruptedDatastore(func() {
+		s.doVisit(s.T(), s.Context(ctx), fmt.Sprintf("%s/secret.html", SecureBaseURL))
+		s.verifySecretAuthorized(s.T(), s.Context(ctx))
+	})
 }

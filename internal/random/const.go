@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package random
 
 const (
@@ -38,6 +42,6 @@ const (
 	// See https://datatracker.ietf.org/doc/html/rfc3986#section-2.3.
 	CharSetRFC3986Unreserved = CharSetAlphabetic + CharSetNumeric + CharSetSymbolicRFC3986Unreserved
 
-	// CharSetUnambiguousUpper  are a set of unambiguous uppercase characters.
-	CharSetUnambiguousUpper = "ABCDEFGHJKLMNOPQRTUVWYXZ2346789"
+	// CharSetUnambiguousUpper are a set of unambiguous uppercase characters.
+	CharSetUnambiguousUpper = "ABCDEFGHJKLMNPQRTUVWYXZ2346789"
 )

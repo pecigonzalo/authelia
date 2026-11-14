@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package utils
 
 import (
@@ -8,7 +12,7 @@ import (
 )
 
 const (
-	// RFC3339Zero is the default value for time.Time.Unix().
+	// RFC3339Zero is the default value for [time.Time.Unix]().
 	RFC3339Zero = int64(-62135596800)
 
 	clean   = "clean"
@@ -31,10 +35,19 @@ const (
 	BlockTypePKIXPublicKey      = "PUBLIC KEY"
 	BlockTypeCertificate        = "CERTIFICATE"
 	BlockTypeCertificateRequest = "CERTIFICATE REQUEST"
+	BlockTypeX509CRL            = "X509 CRL"
 
 	KeyAlgorithmRSA     = "RSA"
 	KeyAlgorithmECDSA   = "ECDSA"
 	KeyAlgorithmEd25519 = "ED25519"
+	KeyAlgorithmMLDSA   = "MLDSA"
+)
+
+// ML-DSA parameter set names, Algorithm names, Curve names.
+const (
+	KeyMLDSAParameters44 = "ML-DSA-44"
+	KeyMLDSAParameters65 = "ML-DSA-65"
+	KeyMLDSAParameters87 = "ML-DSA-87"
 
 	HashAlgorithmSHA1   = "SHA1"
 	HashAlgorithmSHA256 = "SHA256"
@@ -133,4 +146,29 @@ const (
 	strIsDir        = "isdir"
 	strPathNotFound = "pathnotfound"
 	strFileNotFound = "filenotfound"
+)
+
+// locales.
+const (
+	localeDefault          = "en"
+	localeNamespaceDefault = "portal"
+	undefinedLocaleTag     = "und"
+)
+
+// File extensions for the file formats Authelia reads and writes.
+const (
+	// ExtHTML is the file extension for HTML files.
+	ExtHTML = ".html"
+
+	// ExtJSON is the file extension for JSON files.
+	ExtJSON = ".json"
+
+	// ExtYAML is the long file extension for YAML files.
+	ExtYAML = ".yaml"
+
+	// ExtYML is the short file extension for YAML files.
+	ExtYML = ".yml"
+
+	// ExtTOML is the file extension for TOML files.
+	ExtTOML = ".toml"
 )

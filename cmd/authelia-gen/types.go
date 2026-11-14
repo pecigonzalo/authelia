@@ -1,11 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
 	"fmt"
 	"strings"
 	"time"
-
-	"golang.org/x/text/language"
 )
 
 type tmplIssueTemplateData struct {
@@ -30,6 +32,7 @@ type GitHubTagsJSON struct {
 	Name string `json:"name"`
 }
 
+// GitHubReleasesJSON represents the JSON struct for the GitHub Releases API.
 type GitHubReleasesJSON struct {
 	ID              int              `json:"id"`
 	Name            string           `json:"name"`
@@ -51,6 +54,7 @@ type GitHubReleasesJSON struct {
 	Body            string           `json:"body"`
 }
 
+// GitHubAuthorJSON represents the JSON struct for the author of a GitHub release.
 type GitHubAuthorJSON struct {
 	ID                int    `json:"id"`
 	Login             string `json:"login"`
@@ -74,8 +78,31 @@ type GitHubAuthorJSON struct {
 
 // DocsDataMisc represents the docs misc data schema.
 type DocsDataMisc struct {
-	CSP    TemplateCSP `json:"csp"`
-	Latest string      `json:"latest"`
+	CSP               TemplateCSP                   `json:"csp"`
+	Latest            string                        `json:"latest"`
+	Support           DocsDataMiscSupport           `json:"support"`
+	HashingAlgorithms DocsDataMiscHashingAlgorithms `json:"hashing_algorithms"`
+}
+
+// DocsDataMiscHashingAlgorithms represents the hashing algorithm documentation data.
+type DocsDataMiscHashingAlgorithms struct {
+	PBKDF2 DocsDataMiscHashingAlgorithmsPBKDF2 `json:"pbkdf2"`
+}
+
+// DocsDataMiscHashingAlgorithmsPBKDF2 represents the PBKDF2 hashing algorithm documentation data.
+type DocsDataMiscHashingAlgorithmsPBKDF2 struct {
+	Variants map[string]DocsDataMiscHashingAlgorithmsVariant `json:"variants"`
+}
+
+// DocsDataMiscHashingAlgorithmsVariant represents the documentation data for a single hashing algorithm variant.
+type DocsDataMiscHashingAlgorithmsVariant struct {
+	FIPS              string `json:"fips"`
+	DefaultIterations string `json:"default_iterations"`
+}
+
+// DocsDataMiscSupport represents the proxy support documentation data.
+type DocsDataMiscSupport struct {
+	Traefik []string `json:"traefik"`
 }
 
 // TemplateCSP represents the CSP template vars.
@@ -92,26 +119,14 @@ type ConfigurationKey struct {
 	Env    string `json:"env"`
 }
 
-// Languages is the docs json model for the Authelia languages configuration.
-type Languages struct {
-	Defaults   DefaultsLanguages `json:"defaults"`
-	Namespaces []string          `json:"namespaces"`
-	Languages  []Language        `json:"languages"`
+// Compose represents a docker compose file.
+type Compose struct {
+	Services map[string]ComposeService `json:"services"`
 }
 
-type DefaultsLanguages struct {
-	Language  Language `json:"language"`
-	Namespace string   `json:"namespace"`
-}
-
-// Language is the docs json model for a language.
-type Language struct {
-	Display    string   `json:"display"`
-	Locale     string   `json:"locale"`
-	Namespaces []string `json:"namespaces,omitempty"`
-	Fallbacks  []string `json:"fallbacks,omitempty"`
-
-	Tag language.Tag `json:"-"`
+// ComposeService represents a single service in a docker compose file.
+type ComposeService struct {
+	Image string `json:"image"`
 }
 
 const (
@@ -120,15 +135,20 @@ const (
 	labelAreaPrefixStatus   = "status"
 )
 
+type label interface {
+	String() string
+	LabelDescription() string
+}
+
 type labelPriority int
 
-//nolint:deadcode,varcheck // Kept for future use.
 const (
 	labelPriorityCritical labelPriority = iota
 	labelPriorityHigh
 	labelPriorityMedium
 	labelPriorityNormal
 	labelPriorityLow
+	labelPriorityVeryLow
 )
 
 var labelPriorityDescriptions = [...]string{
@@ -137,14 +157,15 @@ var labelPriorityDescriptions = [...]string{
 	"Medium",
 	"Normal",
 	"Low",
+	"Very Low",
 }
 
-func (p labelPriority) String() string {
-	return fmt.Sprintf("%s/%d/%s", labelAreaPrefixPriority, p+1, strings.ToLower(labelPriorityDescriptions[p]))
+func (l labelPriority) String() string {
+	return fmt.Sprintf("%s/%d/%s", labelAreaPrefixPriority, l+1, labelFormatString(labelPriorityDescriptions[l]))
 }
 
-func (p labelPriority) Description() string {
-	return labelPriorityDescriptions[p]
+func (l labelPriority) LabelDescription() string {
+	return labelPriorityDescriptions[l]
 }
 
 type labelStatus int
@@ -155,17 +176,20 @@ const (
 )
 
 var labelStatusDescriptions = [...]string{
-	"needs-design",
-	"needs-triage",
+	"Needs Design",
+	"Needs Triage",
 }
 
-func (s labelStatus) String() string {
-	return fmt.Sprintf("%s/%s", labelAreaPrefixStatus, labelStatusDescriptions[s])
+func (l labelStatus) String() string {
+	return fmt.Sprintf("%s/%s", labelAreaPrefixStatus, labelFormatString(labelStatusDescriptions[l]))
+}
+
+func (l labelStatus) LabelDescription() string {
+	return labelStatusDescriptions[l]
 }
 
 type labelType int
 
-//nolint:deadcode,varcheck // Kept for future use.
 const (
 	labelTypeFeature labelType = iota
 	labelTypeBugUnconfirmed
@@ -173,13 +197,24 @@ const (
 )
 
 var labelTypeDescriptions = [...]string{
-	"feature",
-	"bug/unconfirmed",
-	"bug",
+	"Feature",
+	"Bug: Unconfirmed",
+	"Bug",
 }
 
-func (t labelType) String() string {
-	return fmt.Sprintf("%s/%s", labelAreaPrefixType, labelTypeDescriptions[t])
+func (l labelType) String() string {
+	return fmt.Sprintf("%s/%s", labelAreaPrefixType, labelFormatString(labelTypeDescriptions[l]))
+}
+
+func (l labelType) LabelDescription() string {
+	return labelTypeDescriptions[l]
+}
+
+func labelFormatString(in string) string {
+	in = strings.ReplaceAll(in, ": ", "/")
+	in = strings.ReplaceAll(in, " ", "-")
+
+	return strings.ToLower(in)
 }
 
 // CSPValue represents individual CSP values.
@@ -191,4 +226,19 @@ type CSPValue struct {
 // PackageJSON represents a NPM package.json file.
 type PackageJSON struct {
 	Version string `json:"version"`
+}
+
+// AllContributors represents the .all-contributorsrc configuration file.
+type AllContributors struct {
+	Contributors []Contributor `json:"contributors"`
+}
+
+// Contributor represents an individual contributor within an AllContributors.
+type Contributor struct {
+	ID            string   `json:"-"`
+	Login         string   `json:"login"`
+	Name          string   `json:"name"`
+	AvatarURL     string   `json:"avatar_url"`
+	Profile       string   `json:"profile"`
+	Contributions []string `json:"contributions"`
 }

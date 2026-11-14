@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package authorization
 
 import (
@@ -47,4 +51,15 @@ type AccessControlGroup struct {
 // IsMatch returns true if the AccessControlGroup name matches one of the groups of the Subject.
 func (acg AccessControlGroup) IsMatch(subject Subject) (match bool) {
 	return utils.IsStringInSlice(acg.Name, subject.Groups)
+}
+
+// AccessControlClient represents an ACL subject of type `oauth2:client:`.
+type AccessControlClient struct {
+	Provider string
+	ID       string
+}
+
+// IsMatch returns true if the AccessControlClient ID matches the ClientID of the Subject.
+func (acc AccessControlClient) IsMatch(subject Subject) (match bool) {
+	return acc.ID == subject.ClientID
 }

@@ -1,12 +1,18 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
-import eslintPlugin from "vite-plugin-eslint";
+import { defineConfig, loadEnv } from "vite";
+import checkerPlugin from "vite-plugin-checker";
 import istanbul from "vite-plugin-istanbul";
 import svgr from "vite-plugin-svgr";
-import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig(({ mode }) => {
-    const isCoverage = process.env.VITE_COVERAGE === "true";
+    const env = loadEnv(mode, ".");
+    const allowedHosts = env.VITE_ALLOWED_HOSTS ? env.VITE_ALLOWED_HOSTS.split(",") : [];
+    const isCoverage = env.VITE_COVERAGE === "true";
     const sourcemap = isCoverage ? "inline" : undefined;
 
     const istanbulPlugin = isCoverage
@@ -26,36 +32,93 @@ export default defineConfig(({ mode }) => {
             assetsDir: "static",
             emptyOutDir: true,
             outDir: "../internal/server/public_html",
-            rollupOptions: {
+            rolldownOptions: {
                 output: {
-                    assetFileNames: ({ name }) => {
-                        if (name && name.endsWith(".css")) {
+                    assetFileNames: (assetInfo) => {
+                        if (assetInfo.names.some((name) => name.endsWith(".css"))) {
                             return "static/css/[name].[hash].[ext]";
                         }
 
                         return "static/media/[name].[hash].[ext]";
                     },
-                    chunkFileNames: `static/js/[name].[hash].js`,
+                    chunkFileNames: (chunkInfo) => {
+                        if (chunkInfo.name === "index") {
+                            return `static/js/[name].[hash].js`;
+                        } else {
+                            if (chunkInfo.moduleIds.length === 0) {
+                                return `static/js/[name].[hash].js`;
+                            }
+
+                            const last = chunkInfo.moduleIds.at(-1);
+
+                            if (last) {
+                                const regexp = /authelia\/web\/src\/([a-zA-Z]+)\/([a-zA-Z]+)/;
+                                const match = regexp.exec(last);
+
+                                if (match) {
+                                    if (match[2] === "LoginPortal") {
+                                        return `static/js/portal.[name].[hash].js`;
+                                    } else if (match[2] === "ResetPassword") {
+                                        return `static/js/reset-password.[name].[hash].js`;
+                                    } else if (match[2] === "Settings") {
+                                        if (chunkInfo.name === "SettingsRouter") {
+                                            return `static/js/settings.router.[hash].js`;
+                                        } else {
+                                            return `static/js/settings.[name].[hash].js`;
+                                        }
+                                    } else {
+                                        if (chunkInfo.name === "LoginLayout") {
+                                            return `static/js/${match[1]}.Login.[hash].js`;
+                                        }
+
+                                        if (chunkInfo.name === "MinimalLayout") {
+                                            return `static/js/${match[1]}.Minimal.[hash].js`;
+                                        }
+
+                                        return `static/js/${match[1]}.[name].[hash].js`;
+                                    }
+                                }
+                            }
+
+                            return `static/js/[name].[hash].js`;
+                        }
+                    },
                     entryFileNames: `static/js/[name].[hash].js`,
                 },
             },
             sourcemap,
         },
+        plugins: [
+            checkerPlugin({
+                eslint: { lintCommand: "eslint . --ext .js,.jsx,.ts,.tsx", useFlatConfig: true },
+                typescript: { typescriptPath: "@typescript/native" },
+            }),
+            istanbulPlugin,
+            react(),
+            svgr(),
+            tailwindcss(),
+        ],
+        resolve: {
+            tsconfigPaths: true,
+        },
         server: {
+            allowedHosts: ["login.example.com", ...allowedHosts],
             open: false,
             port: 3000,
+            watch: {
+                ignored: ["**/node_modules/**", "**/dist/**", "**/.*/**"],
+            },
         },
         test: {
             coverage: {
+                include: ["src/**/*.{js,jsx,ts,tsx}"],
                 provider: "istanbul",
+                reporter: ["text", "html", "clover", "json", "lcovonly"],
             },
             environment: "happy-dom",
             globals: true,
-            onConsoleLog(log) {
-                if (log.includes('No routes matched location "blank"')) return false;
-            },
+            reporters: ["default", "html"],
             setupFiles: ["src/setupTests.ts"],
         },
-        plugins: [eslintPlugin({ cache: false }), istanbulPlugin, react(), svgr(), tsconfigPaths()],
     };
 });

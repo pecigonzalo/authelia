@@ -1,117 +1,126 @@
-import React, { Fragment, ReactNode, useEffect } from "react";
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
 
-import { Container, Divider, Grid, Link, Theme } from "@mui/material";
-import { grey } from "@mui/material/colors";
-import makeStyles from "@mui/styles/makeStyles";
+import { ReactNode, useCallback, useEffect, useState } from "react";
+
+import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 
-import { ReactComponent as UserSvg } from "@assets/images/user.svg";
+import UserSvg from "@assets/images/user.svg?react";
+import AppBarLoginPortal from "@components/AppBarLoginPortal";
+import Brand from "@components/Brand";
 import PrivacyPolicyDrawer from "@components/PrivacyPolicyDrawer";
-import PrivacyPolicyLink from "@components/PrivacyPolicyLink";
 import TypographyWithTooltip from "@components/TypographyWithTooltip";
-import { getLogoOverride, getPrivacyPolicyEnabled } from "@utils/Configuration";
+import { EncodedName } from "@constants/constants";
+import { useLanguageContext } from "@contexts/LanguageContext";
+import { Language } from "@models/LocaleInformation";
+import { UserInfo } from "@models/UserInfo";
+import { getLocaleInformation } from "@services/LocaleInformation";
+import { getLogoOverride } from "@utils/Configuration";
+
+const maxWidthMap: Record<string, string> = {
+    lg: "max-w-4xl",
+    md: "max-w-2xl",
+    sm: "max-w-xl",
+    xl: "max-w-6xl",
+    xs: "max-w-[444px]",
+};
 
 export interface Props {
     id?: string;
     children?: ReactNode;
-    title?: string;
-    titleTooltip?: string;
-    subtitle?: string;
-    subtitleTooltip?: string;
-    showBrand?: boolean;
+    title?: null | string;
+    titleTooltip?: null | string;
+    subtitle?: null | string;
+    subtitleTooltip?: null | string;
+    userInfo?: UserInfo;
+    maxWidth?: false | string;
 }
 
-const url = "https://www.authelia.com";
-
 const LoginLayout = function (props: Props) {
-    const styles = useStyles();
     const { t: translate } = useTranslation();
+    const { locale, setLocale } = useLanguageContext();
+
+    const [localeList, setLocaleList] = useState<Language[]>([]);
 
     const logo = getLogoOverride() ? (
-        <img src="./static/media/logo.png" alt="Logo" className={styles.icon} />
+        <img
+            src="./static/media/logo.png"
+            alt="Logo"
+            className="mx-auto my-2 w-16"
+            style={{ fill: "var(--custom-icon)" }}
+        />
     ) : (
-        <UserSvg className={styles.icon} />
+        <UserSvg className="mx-auto my-2 w-16" style={{ fill: "var(--custom-icon)" }} />
     );
 
-    const privacyEnabled = getPrivacyPolicyEnabled();
+    const handleChangeLanguage = (locale: string) => {
+        setLocale(locale);
+    };
+
+    const fetchLocaleInformation = useCallback(async () => {
+        try {
+            const data = await getLocaleInformation();
+            setLocaleList(data.languages);
+
+            return data;
+        } catch (err) {
+            console.error("could not get locale list:", err);
+        }
+    }, []);
 
     useEffect(() => {
-        document.title = `${translate("Login")} - Authelia`;
+        const fetchData = async () => {
+            await fetchLocaleInformation();
+        };
+        void fetchData();
+    }, [fetchLocaleInformation]);
+
+    useEffect(() => {
+        document.title = translate("Login - {{authelia}}", { authelia: atob(String.fromCodePoint(...EncodedName)) });
     }, [translate]);
 
+    const containerMaxWidth = props.maxWidth === false ? "" : (maxWidthMap[props.maxWidth ?? "xs"] ?? "max-w-xs");
+
     return (
-        <Grid id={props.id} className={styles.root} container spacing={0} alignItems="center" justifyContent="center">
-            <Container maxWidth="xs" className={styles.rootContainer}>
-                <Grid container>
-                    <Grid item xs={12}>
-                        {logo}
-                    </Grid>
-                    {props.title ? (
-                        <Grid item xs={12}>
-                            <TypographyWithTooltip variant={"h5"} value={props.title} tooltip={props.titleTooltip} />
-                        </Grid>
-                    ) : null}
-                    {props.subtitle ? (
-                        <Grid item xs={12}>
-                            <TypographyWithTooltip
-                                variant={"h6"}
-                                value={props.subtitle}
-                                tooltip={props.subtitleTooltip}
-                            />
-                        </Grid>
-                    ) : null}
-                    <Grid item xs={12} className={styles.body}>
-                        {props.children}
-                    </Grid>
-                    {props.showBrand ? (
-                        <Grid item container xs={12} alignItems="center" justifyContent="center">
-                            <Grid item xs={4}>
-                                <Link href={url} target="_blank" underline="hover" className={styles.footerLinks}>
-                                    {translate("Powered by")} Authelia
-                                </Link>
-                            </Grid>
-                            {privacyEnabled ? (
-                                <Fragment>
-                                    <Divider orientation="vertical" flexItem variant="middle" />
-                                    <Grid item xs={4}>
-                                        <PrivacyPolicyLink className={styles.footerLinks} />
-                                    </Grid>
-                                </Fragment>
-                            ) : null}
-                        </Grid>
-                    ) : null}
-                </Grid>
-            </Container>
-            <PrivacyPolicyDrawer />
-        </Grid>
+        <div>
+            <AppBarLoginPortal
+                userInfo={props.userInfo}
+                onLocaleChange={handleChangeLanguage}
+                localeList={localeList}
+                localeCurrent={locale}
+            />
+            <div id={props.id} className="flex min-h-[90vh] items-center justify-center text-center">
+                <div className={cn("mx-auto w-full px-8", containerMaxWidth)}>
+                    <div className="flex flex-col items-stretch">
+                        <div className="w-full p-2">{logo}</div>
+                        {props.title ? (
+                            <div className="w-full">
+                                <TypographyWithTooltip
+                                    variant="h5"
+                                    value={props.title}
+                                    tooltip={props.titleTooltip ?? undefined}
+                                />
+                            </div>
+                        ) : null}
+                        {props.subtitle ? (
+                            <div className="w-full">
+                                <TypographyWithTooltip
+                                    variant="h6"
+                                    value={props.subtitle}
+                                    tooltip={props.subtitleTooltip ?? undefined}
+                                />
+                            </div>
+                        ) : null}
+                        <div className="mt-2 py-2">{props.children}</div>
+                        <Brand />
+                    </div>
+                </div>
+                <PrivacyPolicyDrawer />
+            </div>
+        </div>
     );
 };
 
 export default LoginLayout;
-
-const useStyles = makeStyles((theme: Theme) => ({
-    root: {
-        minHeight: "90vh",
-        textAlign: "center",
-    },
-    rootContainer: {
-        paddingLeft: 32,
-        paddingRight: 32,
-    },
-    title: {},
-    subtitle: {},
-    icon: {
-        margin: theme.spacing(),
-        width: "64px",
-        fill: theme.custom.icon,
-    },
-    body: {
-        marginTop: theme.spacing(),
-        paddingTop: theme.spacing(),
-        paddingBottom: theme.spacing(),
-    },
-    footerLinks: {
-        fontSize: "0.7em",
-        color: grey[500],
-    },
-}));

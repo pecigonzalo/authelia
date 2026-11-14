@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -30,28 +34,25 @@ func NewMultiCookieDomainScenario(domain, nextDomain string, cookieNames []strin
 }
 
 func (s *MultiCookieDomainScenario) SetupSuite() {
-	browser, err := StartRod()
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	s.RodSession = browser
 
-	err = updateDevEnvFileForDomain(s.domain, false)
-	s.Require().NoError(err)
+	s.Require().NoError(updateDevEnvFileForDomain(s.domain, multiCookieDomainDockerEnvironment))
 }
 
 func (s *MultiCookieDomainScenario) TearDownSuite() {
-	err := s.RodSession.Stop()
-
+	err := s.Stop()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
 func (s *MultiCookieDomainScenario) SetupTest() {
-	s.Page = s.doCreateTab(s.T(), HomeBaseURL)
-	s.verifyIsHome(s.T(), s.Page)
+	s.doSetupTest(HomeBaseURL)
 }
 
 func (s *MultiCookieDomainScenario) TearDownTest() {
@@ -61,6 +62,7 @@ func (s *MultiCookieDomainScenario) TearDownTest() {
 
 func (s *MultiCookieDomainScenario) TestCookieName() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -72,11 +74,12 @@ func (s *MultiCookieDomainScenario) TestCookieName() {
 
 	cookieNames := s.GetCookieNames()
 
-	s.Assert().Equalf(s.cookieNames, cookieNames, "cookie names should include '%s' (only and all of) but includes '%s'", strings.Join(s.cookieNames, ","), strings.Join(cookieNames, ","))
+	s.Assert().ElementsMatchf(s.cookieNames, cookieNames, "cookie names should include '%s' (only and all of) but includes '%s'", strings.Join(s.cookieNames, ","), strings.Join(cookieNames, ","))
 }
 
 func (s *MultiCookieDomainScenario) TestRememberMe() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -93,6 +96,7 @@ func (s *MultiCookieDomainScenario) TestRememberMe() {
 
 func (s *MultiCookieDomainScenario) TestShouldAuthorizeSecret() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -105,6 +109,7 @@ func (s *MultiCookieDomainScenario) TestShouldAuthorizeSecret() {
 
 func (s *MultiCookieDomainScenario) TestShouldRequestLoginOnNextDomainAfterLoginOnFirstDomain() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -122,6 +127,7 @@ func (s *MultiCookieDomainScenario) TestShouldRequestLoginOnNextDomainAfterLogin
 
 func (s *MultiCookieDomainScenario) TestShouldStayLoggedInOnNextDomainWhenLoggedOffOnFirstDomain() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -133,8 +139,7 @@ func (s *MultiCookieDomainScenario) TestShouldStayLoggedInOnNextDomainWhenLogged
 	s.doLoginOneFactor(s.T(), s.Context(ctx), "john", "password", s.remember, s.domain, firstDomainTargetURL)
 	s.verifySecretAuthorized(s.T(), s.Page)
 
-	err := updateDevEnvFileForDomain(s.nextDomain, false)
-	s.Require().NoError(err)
+	s.Require().NoError(updateDevEnvFileForDomain(s.nextDomain, multiCookieDomainDockerEnvironment))
 
 	s.doLoginOneFactor(s.T(), s.Context(ctx), "john", "password", !s.remember, s.nextDomain, nextDomainTargetURL)
 	s.verifySecretAuthorized(s.T(), s.Page)

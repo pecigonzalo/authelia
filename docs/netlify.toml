@@ -1,43 +1,115 @@
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
 [build]
   publish = "public"
   functions = "functions"
+  command = "./tool/build"
 
 [build.environment]
-  NODE_VERSION = "16.18.1"
-  NPM_VERSION = "8.19.2"
-  GO_VERSION = "1.19.5"
+  NODE_VERSION = "24.13.1"
+  NPM_VERSION = "11.8.0"
+  HUGO_VERSION = "0.169.0"
+  GO_VERSION = "1.26.1"
+  DART_SASS_VERSION = "1.108.2"
+  PNPM_FLAGS = "--no-optional"
 
-[context.production]
-  command = "pnpm run build"
+[context.staging]
+  command = "./tool/build -b $DEPLOY_PRIME_URL"
 
 [context.deploy-preview]
-  command = "pnpm run build --baseURL $DEPLOY_URL"
+  command = "./tool/build -b $DEPLOY_PRIME_URL"
 
 [context.branch-deploy]
-  command = "pnpm run build --baseURL $DEPLOY_URL"
-
-[context.next]
-  command = "pnpm run build"
+  command = "./tool/build -b $DEPLOY_PRIME_URL"
 
 [context.next.environment]
   HUGO_ENV = "next"
 
-[[plugins]]
-  package = "netlify-plugin-submit-sitemap"
-
-	[plugins.inputs]
-    baseUrl = "https://www.authelia.com/"
-    sitemapPath = "/sitemap.xml"
-    ignorePeriod = 0
-    providers = [
-      "google",
-      "yandex"
-    ]
-
 [dev]
   framework = "#custom"
-  command = "npm run start"
+  command = "pnpm dev"
   targetPort = 1313
   port = 8888
   publish = "public"
   autoLaunch = false
+
+[[redirects]]
+  from = "/l/apt"
+  to = "/integration/deployment/bare-metal/#add-the-apt-repository"
+  status = 301
+
+[[redirects]]
+  from = "/l/charts"
+  to = "https://charts.authelia.com"
+  status = 301
+
+[[redirects]]
+  from = "/l/translate"
+  to = "https://translate.authelia.com"
+  status = 301
+
+[[redirects]]
+  from = "/l/github"
+  to = "https://github.com/authelia/authelia"
+  status = 301
+
+[[redirects]]
+  from = "/l/bug"
+  to = "https://github.com/authelia/authelia/issues/new?template=bug-report.yml"
+  status = 301
+
+[[redirects]]
+  from = "/l/fr"
+  to = "https://github.com/authelia/authelia/issues/new?template=feature-request.yml"
+  status = 301
+
+[[redirects]]
+  from = "/docs"
+  to = "/"
+  status = 301
+
+[[redirects]]
+  from = "/docs/"
+  to = "/"
+  status = 301
+
+[[redirects]]
+  from = "/c/acl-match-concept-2"
+  to = "/configuration/security/access-control/#rule-matching-concept-2-subject-criteria-requires-authentication"
+  status = 301
+
+[[redirects]]
+  from = "/*"
+  to = "/404/"
+  status = 404
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options = "nosniff"
+    X-XSS-Protection = "1; mode=block"
+    Content-Security-Policy = "default-src 'self'; manifest-src 'self'; connect-src 'self' https://*.algolia.net https://*.algolianet.com https://*.algolia.io; font-src 'self'; img-src 'self' https://avatars.githubusercontent.com https://github.com data:; script-src 'self' 'nonce-dXNlcj0iaGVsbG8iLGRvbWFpbj0iaGVua3ZlcmxpbmRlLmNvbSIsZG9jdW1lbnQud3JpdGUodXNlcisiQCIrZG9tYWluKTs=' 'sha256-aWZ3y/RxbBYKHXH0z8+8ljrHG1mSBvyzSfxSMjBSaXk=' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; base-uri 'self'"
+    Cross-Origin-Opener-Policy = "same-origin"
+    X-Frame-Options = "SAMEORIGIN"
+    Referrer-Policy = "strict-origin"
+    Permissions-Policy = "geolocation=(self), microphone=(), camera=()"
+    Cache-Control = "no-cache"
+    Access-Control-Allow-Origin = "*"
+
+[[headers]]
+  for = "/client/*"
+  [headers.values]
+    Content-Type = "text/html; charset=UTF-8"
+
+[[headers]]
+  for = "/provider/*"
+  [headers.values]
+    Content-Type = "text/html; charset=UTF-8"
+
+[[headers]]
+  for = "/tools/*"
+  [headers.values]
+    Content-Type = "text/html; charset=UTF-8"

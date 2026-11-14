@@ -1,6 +1,17 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { useRemoteCall } from "@hooks/RemoteCall";
-import { getUserInfoTOTPConfiguration } from "@services/UserInfoTOTPConfiguration";
+import {
+    getUserInfoTOTPConfiguration,
+    getUserInfoTOTPConfigurationOptional,
+} from "@services/UserInfoTOTPConfiguration";
 
 export function useUserInfoTOTPConfiguration() {
-    return useRemoteCall(getUserInfoTOTPConfiguration, []);
+    return useRemoteCall(getUserInfoTOTPConfiguration);
+}
+
+export function useUserInfoTOTPConfigurationOptional() {
+    return useRemoteCall(getUserInfoTOTPConfigurationOptional);
 }

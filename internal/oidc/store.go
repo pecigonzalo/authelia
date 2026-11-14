@@ -1,15 +1,24 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package oidc
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/ory/fosite"
+
+	oauthelia2 "authelia.com/provider/oauth2"
+	"authelia.com/provider/oauth2/handler/oauth2"
+	"authelia.com/provider/oauth2/handler/openid"
+	"authelia.com/provider/oauth2/handler/pkce"
+	"authelia.com/provider/oauth2/handler/rfc8628"
+	ostorage "authelia.com/provider/oauth2/storage"
 
 	"github.com/authelia/authelia/v4/internal/authorization"
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
@@ -18,36 +27,71 @@ import (
 	"github.com/authelia/authelia/v4/internal/storage"
 )
 
-// NewStore returns a Store when provided with a schema.OpenIDConnectConfiguration and storage.Provider.
-func NewStore(config *schema.OpenIDConnectConfiguration, provider storage.Provider) (store *Store) {
-	logger := logging.Logger()
-
+// NewStore returns a Store when provided with a schema.OpenIDConnect and storage.Provider.
+func NewStore(config *schema.Configuration, provider storage.Provider) (store *Store) {
 	store = &Store{
-		provider: provider,
-		clients:  map[string]*Client{},
-	}
-
-	for _, client := range config.Clients {
-		policy := authorization.NewLevel(client.Policy)
-		logger.Debugf("Registering client %s with policy %s (%v)", client.ID, client.Policy, policy)
-
-		store.clients[client.ID] = NewClient(client)
+		ClientStore: NewMemoryClientStore(config),
+		provider:    provider,
 	}
 
 	return store
 }
 
+// NewMemoryClientStore returns a new *MemoryClientStore given the provided configuration.
+func NewMemoryClientStore(config *schema.Configuration) (store *MemoryClientStore) {
+	logger := logging.Logger()
+
+	store = &MemoryClientStore{
+		clients: map[string]Client{},
+	}
+
+	policies := map[string]ClientAuthorizationPolicy{
+		"one_factor": {Name: "one_factor", DefaultPolicy: authorization.NewLevel("one_factor")},
+		"two_factor": {Name: "two_factor", DefaultPolicy: authorization.NewLevel("two_factor")},
+	}
+
+	for name, p := range config.IdentityProviders.OIDC.AuthorizationPolicies {
+		policies[name] = NewClientAuthorizationPolicy(name, p)
+	}
+
+	for _, client := range config.IdentityProviders.OIDC.Clients {
+		logger.Debugf("Registering OpenID Connect 1.0 client with client id '%s' and policy '%s'", client.ID, client.AuthorizationPolicy)
+
+		store.clients[client.ID] = NewClient(client, config.IdentityProviders.OIDC, policies)
+	}
+
+	return store
+}
+
+// GetRegisteredClient returns a Client matching the provided id.
+func (s *MemoryClientStore) GetRegisteredClient(_ context.Context, id string) (client Client, err error) {
+	client, ok := s.clients[id]
+	if !ok {
+		return nil, oauthelia2.ErrInvalidClient.WithDebugf("Client with id '%s' does not appear to be a registered client.", id)
+	}
+
+	return client, nil
+}
+
 // GenerateOpaqueUserID either retrieves or creates an opaque user id from a sectorID and username.
 func (s *Store) GenerateOpaqueUserID(ctx context.Context, sectorID, username string) (opaqueID *model.UserOpaqueIdentifier, err error) {
 	if opaqueID, err = s.provider.LoadUserOpaqueIdentifierBySignature(ctx, "openid", sectorID, username); err != nil {
-		return nil, err
+		return nil, errStorage(err)
 	} else if opaqueID == nil {
 		if opaqueID, err = model.NewUserOpaqueIdentifier("openid", sectorID, username); err != nil {
 			return nil, err
 		}
 
 		if err = s.provider.SaveUserOpaqueIdentifier(ctx, *opaqueID); err != nil {
-			return nil, err
+			if !storage.IsUniqueConstraintViolation(err) {
+				return nil, errStorage(err)
+			}
+
+			if opaqueID, err = s.provider.LoadUserOpaqueIdentifierBySignature(ctx, "openid", sectorID, username); err != nil {
+				return nil, errStorage(err)
+			} else if opaqueID == nil {
+				return nil, errStorage(fmt.Errorf("error loading the user opaque id which was saved concurrently for user '%s': the user opaque id was not found", username))
+			}
 		}
 	}
 
@@ -65,29 +109,9 @@ func (s *Store) GetSubject(ctx context.Context, sectorID, username string) (subj
 	return opaqueID.Identifier, nil
 }
 
-// GetClientPolicy retrieves the policy from the client with the matching provided id.
-func (s *Store) GetClientPolicy(id string) (level authorization.Level) {
-	client, err := s.GetFullClient(id)
-	if err != nil {
-		return authorization.TwoFactor
-	}
-
-	return client.Policy
-}
-
-// GetFullClient returns a fosite.Client asserted as an Client matching the provided id.
-func (s *Store) GetFullClient(id string) (client *Client, err error) {
-	client, ok := s.clients[id]
-	if !ok {
-		return nil, fosite.ErrInvalidClient
-	}
-
-	return client, nil
-}
-
 // IsValidClientID returns true if the provided id exists in the OpenIDConnectProvider.Clients map.
-func (s *Store) IsValidClientID(id string) (valid bool) {
-	_, err := s.GetFullClient(id)
+func (s *Store) IsValidClientID(ctx context.Context, id string) (valid bool) {
+	_, err := s.GetRegisteredClient(ctx, id)
 
 	return err == nil
 }
@@ -95,58 +119,63 @@ func (s *Store) IsValidClientID(id string) (valid bool) {
 // BeginTX starts a transaction.
 // This implements a portion of fosite storage.Transactional interface.
 func (s *Store) BeginTX(ctx context.Context) (c context.Context, err error) {
-	return s.provider.BeginTX(ctx)
+	if c, err = s.provider.BeginTX(ctx); err != nil {
+		return nil, errStorage(err)
+	}
+
+	return c, nil
 }
 
 // Commit completes a transaction.
 // This implements a portion of fosite storage.Transactional interface.
 func (s *Store) Commit(ctx context.Context) (err error) {
-	return s.provider.Commit(ctx)
+	return errStorage(s.provider.Commit(ctx))
 }
 
 // Rollback rolls a transaction back.
 // This implements a portion of fosite storage.Transactional interface.
 func (s *Store) Rollback(ctx context.Context) (err error) {
-	return s.provider.Rollback(ctx)
+	return errStorage(s.provider.Rollback(ctx))
 }
 
 // GetClient loads the client by its ID or returns an error if the client does not exist or another error occurred.
-// This implements a portion of fosite.ClientManager.
-func (s *Store) GetClient(_ context.Context, id string) (client fosite.Client, err error) {
-	return s.GetFullClient(id)
+// This implements a portion of oauthelia2.ClientManager.
+func (s *Store) GetClient(ctx context.Context, id string) (client oauthelia2.Client, err error) {
+	return s.GetRegisteredClient(ctx, id)
 }
 
-// ClientAssertionJWTValid returns an error if the JTI is known or the DB check failed and nil if the JTI is not known.
-// This implements a portion of fosite.ClientManager.
-func (s *Store) ClientAssertionJWTValid(ctx context.Context, jti string) (err error) {
-	signature := fmt.Sprintf("%x", sha256.Sum256([]byte(jti)))
-
-	blacklistedJTI, err := s.provider.LoadOAuth2BlacklistedJTI(ctx, signature)
+// ClientAssertionJWTValid returns an error if the JTI is known for the client or the DB check failed and nil if the
+// JTI is not known.
+// This implements a portion of oauthelia2.ClientManager.
+func (s *Store) ClientAssertionJWTValid(ctx context.Context, clientID, jti string) (err error) {
+	blacklistedJTI, err := s.provider.LoadOAuth2BlacklistedJTI(ctx, clientID, model.NewOAuth2BlacklistedJTISignature(jti))
 
 	switch {
-	case errors.Is(sql.ErrNoRows, err):
+	case errors.Is(err, sql.ErrNoRows):
 		return nil
 	case err != nil:
-		return err
+		return errStorage(err)
 	case blacklistedJTI.ExpiresAt.After(time.Now()):
-		return fosite.ErrJTIKnown
+		return oauthelia2.ErrJTIKnown
 	default:
 		return nil
 	}
 }
 
-// SetClientAssertionJWT marks a JTI as known for the given expiry time. Before inserting the new JTI, it will clean
-// up any existing JTIs that have expired as those tokens can not be replayed due to the expiry.
-// This implements a portion of fosite.ClientManager.
-func (s *Store) SetClientAssertionJWT(ctx context.Context, jti string, exp time.Time) (err error) {
-	blacklistedJTI := model.NewOAuth2BlacklistedJTI(jti, exp)
+// SetClientAssertionJWT atomically marks a JTI as known for the client until the given expiry time. It returns the
+// oauthelia2.ErrJTIKnown error when the JTI is already known for the client and has not expired.
+// This implements a portion of oauthelia2.ClientManager.
+func (s *Store) SetClientAssertionJWT(ctx context.Context, clientID, jti string, exp time.Time) (err error) {
+	if err = s.provider.SaveOAuth2BlacklistedJTI(ctx, model.NewOAuth2BlacklistedJTI(clientID, jti, exp)); errors.Is(err, storage.ErrNoRowsAffected) {
+		return oauthelia2.ErrJTIKnown
+	}
 
-	return s.provider.SaveOAuth2BlacklistedJTI(ctx, blacklistedJTI)
+	return errStorage(err)
 }
 
 // CreateAuthorizeCodeSession stores the authorization request for a given authorization code.
 // This implements a portion of oauth2.AuthorizeCodeStorage.
-func (s *Store) CreateAuthorizeCodeSession(ctx context.Context, code string, request fosite.Requester) (err error) {
+func (s *Store) CreateAuthorizeCodeSession(ctx context.Context, code string, request oauthelia2.Requester) (err error) {
 	return s.saveSession(ctx, storage.OAuth2SessionTypeAuthorizeCode, code, request)
 }
 
@@ -155,22 +184,29 @@ func (s *Store) CreateAuthorizeCodeSession(ctx context.Context, code string, req
 // ErrInvalidatedAuthorizeCode error.
 // This implements a portion of oauth2.AuthorizeCodeStorage.
 func (s *Store) InvalidateAuthorizeCodeSession(ctx context.Context, code string) (err error) {
-	return s.provider.DeactivateOAuth2Session(ctx, storage.OAuth2SessionTypeAuthorizeCode, code)
+	if err = s.provider.DeactivateOAuth2Session(ctx, storage.OAuth2SessionTypeAuthorizeCode, code); err == nil {
+		return nil
+	}
+
+	if errors.Is(err, storage.ErrNoRowsAffected) {
+		return oauthelia2.ErrInvalidatedAuthorizeCode
+	}
+
+	return errStorage(err)
 }
 
 // GetAuthorizeCodeSession hydrates the session based on the given code and returns the authorization request.
 // If the authorization code has been invalidated with `InvalidateAuthorizeCodeSession`, this
 // method should return the ErrInvalidatedAuthorizeCode error.
-// Make sure to also return the fosite.Requester value when returning the fosite.ErrInvalidatedAuthorizeCode error!
+// Make sure to also return the oauthelia2.Requester value when returning the oauthelia2.ErrInvalidatedAuthorizeCode error!
 // This implements a portion of oauth2.AuthorizeCodeStorage.
-func (s *Store) GetAuthorizeCodeSession(ctx context.Context, code string, session fosite.Session) (request fosite.Requester, err error) {
-	// TODO: Implement the fosite.ErrInvalidatedAuthorizeCode error above. This requires splitting the invalidated sessions and deleted sessions.
+func (s *Store) GetAuthorizeCodeSession(ctx context.Context, code string, session oauthelia2.Session) (request oauthelia2.Requester, err error) {
 	return s.loadRequesterBySignature(ctx, storage.OAuth2SessionTypeAuthorizeCode, code, session)
 }
 
 // CreateAccessTokenSession stores the authorization request for a given access token.
 // This implements a portion of oauth2.AccessTokenStorage.
-func (s *Store) CreateAccessTokenSession(ctx context.Context, signature string, request fosite.Requester) (err error) {
+func (s *Store) CreateAccessTokenSession(ctx context.Context, signature string, request oauthelia2.Requester) (err error) {
 	return s.saveSession(ctx, storage.OAuth2SessionTypeAccessToken, signature, request)
 }
 
@@ -189,14 +225,25 @@ func (s *Store) RevokeAccessToken(ctx context.Context, requestID string) (err er
 
 // GetAccessTokenSession gets the authorization request for a given access token.
 // This implements a portion of oauth2.AccessTokenStorage.
-func (s *Store) GetAccessTokenSession(ctx context.Context, signature string, session fosite.Session) (request fosite.Requester, err error) {
+func (s *Store) GetAccessTokenSession(ctx context.Context, signature string, session oauthelia2.Session) (request oauthelia2.Requester, err error) {
 	return s.loadRequesterBySignature(ctx, storage.OAuth2SessionTypeAccessToken, signature, session)
 }
 
-// CreateRefreshTokenSession stores the authorization request for a given refresh token.
+// CreateRefreshTokenSession stores the authorization request for a given refresh token. The accessSignature is the
+// signature of the access token issued alongside this refresh token and is recorded against the session so
+// RotateRefreshToken can revoke exactly that access token when this refresh token is exchanged. It is empty when the
+// refresh token was issued without an access token.
 // This implements a portion of oauth2.RefreshTokenStorage.
-func (s *Store) CreateRefreshTokenSession(ctx context.Context, signature string, request fosite.Requester) (err error) {
-	return s.saveSession(ctx, storage.OAuth2SessionTypeRefreshToken, signature, request)
+func (s *Store) CreateRefreshTokenSession(ctx context.Context, signature string, accessSignature string, request oauthelia2.Requester) (err error) {
+	var session *model.OAuth2Session
+
+	if session, err = model.NewOAuth2SessionFromRequest(signature, request); err != nil {
+		return err
+	}
+
+	session.AccessSignature = accessSignature
+
+	return errStorage(s.provider.SaveOAuth2Session(ctx, storage.OAuth2SessionTypeRefreshToken, *session))
 }
 
 // DeleteRefreshTokenSession marks the authorization request for a given refresh token as deleted.
@@ -210,51 +257,138 @@ func (s *Store) DeleteRefreshTokenSession(ctx context.Context, signature string)
 // then the authorization server SHOULD also invalidate all access tokens based on the same authorization grant (see Implementation Note).
 // This implements a portion of oauth2.TokenRevocationStorage.
 func (s *Store) RevokeRefreshToken(ctx context.Context, requestID string) (err error) {
-	return s.provider.DeactivateOAuth2SessionByRequestID(ctx, storage.OAuth2SessionTypeRefreshToken, requestID)
+	return errStorage(s.provider.DeactivateOAuth2SessionByRequestID(ctx, storage.OAuth2SessionTypeRefreshToken, requestID))
 }
 
-// RevokeRefreshTokenMaybeGracePeriod revokes an access token as specified in: https://datatracker.ietf.org/doc/html/rfc7009#section-2.1
-// If the token passed to the request is an access token, the server MAY revoke the respective refresh token as well.
-// This implements a portion of oauth2.TokenRevocationStorage.
-func (s *Store) RevokeRefreshTokenMaybeGracePeriod(ctx context.Context, requestID string, signature string) (err error) {
+// UpdateRefreshTokenSession replaces the request stored for the given refresh token signature while the refresh token
+// stays valid, keeping its state and the access token signature it is paired with.
+// This implements a portion of oauth2.RefreshTokenStorage.
+func (s *Store) UpdateRefreshTokenSession(ctx context.Context, signature string, request oauthelia2.Requester) (err error) {
+	var session *model.OAuth2Session
+
+	if session, err = model.NewOAuth2SessionFromRequest(signature, request); err != nil {
+		return err
+	}
+
+	if err = s.provider.UpdateOAuth2RefreshTokenSessionRequest(ctx, *session); errors.Is(err, storage.ErrNoRowsAffected) {
+		return oauthelia2.ErrNotFound
+	}
+
+	return errStorage(err)
+}
+
+// RotateRefreshToken deactivates the refresh token being exchanged and revokes the access token that was issued
+// alongside it, so a rotated pair cannot outlive the rotation. It returns the oauthelia2.ErrNotFound error when the
+// refresh token does not exist, and the oauthelia2.ErrInactiveToken error when it was already rotated, as this check
+// is what makes a refresh token single use.
+// This implements a portion of oauth2.RefreshTokenStorage.
+func (s *Store) RotateRefreshToken(ctx context.Context, requestID string, signature string) (err error) {
+	var accessSignature string
+
+	if accessSignature, err = s.provider.LoadOAuth2RefreshTokenSessionAccessSignature(ctx, signature); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return oauthelia2.ErrNotFound
+		}
+
+		return errStorage(err)
+	}
+
+	if err = s.provider.DeactivateOAuth2Session(ctx, storage.OAuth2SessionTypeRefreshToken, signature); err != nil {
+		if errors.Is(err, storage.ErrNoRowsAffected) {
+			return oauthelia2.ErrInactiveToken
+		}
+
+		return errStorage(err)
+	}
+
+	switch accessSignature {
+	case "":
+		if err = s.RevokeAccessToken(ctx, requestID); err != nil {
+			return err
+		}
+	default:
+		if err = s.provider.RevokeOAuth2Session(ctx, storage.OAuth2SessionTypeAccessToken, accessSignature); err != nil && !errors.Is(err, storage.ErrNoRowsAffected) {
+			return errStorage(err)
+		}
+	}
+
 	return s.RevokeRefreshToken(ctx, requestID)
 }
 
-// GetRefreshTokenSession gets the authorization request for a given refresh token.
+// CreateClient is not implemented as this Authorization Server registers clients from its configuration rather than
+// through RFC 7591 Dynamic Client Registration.
+// This implements a portion of oauthelia2.ClientRegistrationManager.
+func (s *Store) CreateClient(ctx context.Context, client oauthelia2.Client) (err error) {
+	return errClientRegistrationNotSupported
+}
+
+// UpdateClient is not implemented as this Authorization Server registers clients from its configuration rather than
+// through RFC 7592 Dynamic Client Registration Management.
+// This implements a portion of oauthelia2.ClientRegistrationManager.
+func (s *Store) UpdateClient(ctx context.Context, id string, client oauthelia2.Client) (err error) {
+	return errClientRegistrationNotSupported
+}
+
+// DeleteClient is not implemented as this Authorization Server registers clients from its configuration rather than
+// through RFC 7592 Dynamic Client Registration Management.
+// This implements a portion of oauthelia2.ClientRegistrationManager.
+func (s *Store) DeleteClient(ctx context.Context, id string) (err error) {
+	return errClientRegistrationNotSupported
+}
+
+// GetRefreshTokenSession gets the authorization request for a given refresh token. It returns the oauthelia2.ErrNotFound
+// error when no session exists for the refresh token, and the request along with the oauthelia2.ErrInactiveToken error
+// when the refresh token was rotated or revoked, so the reuse of the refresh token revokes the grant.
 // This implements a portion of oauth2.RefreshTokenStorage.
-func (s *Store) GetRefreshTokenSession(ctx context.Context, signature string, session fosite.Session) (request fosite.Requester, err error) {
+func (s *Store) GetRefreshTokenSession(ctx context.Context, signature string, session oauthelia2.Session) (request oauthelia2.Requester, err error) {
 	return s.loadRequesterBySignature(ctx, storage.OAuth2SessionTypeRefreshToken, signature, session)
 }
 
 // CreatePKCERequestSession stores the authorization request for a given PKCE request.
 // This implements a portion of pkce.PKCERequestStorage.
-func (s *Store) CreatePKCERequestSession(ctx context.Context, signature string, request fosite.Requester) (err error) {
+func (s *Store) CreatePKCERequestSession(ctx context.Context, signature string, request oauthelia2.Requester) (err error) {
 	return s.saveSession(ctx, storage.OAuth2SessionTypePKCEChallenge, signature, request)
 }
 
 // DeletePKCERequestSession marks the authorization request for a given PKCE request as deleted.
 // This implements a portion of pkce.PKCERequestStorage.
 func (s *Store) DeletePKCERequestSession(ctx context.Context, signature string) (err error) {
-	return s.revokeSessionBySignature(ctx, storage.OAuth2SessionTypeAccessToken, signature)
+	return s.revokeSessionBySignature(ctx, storage.OAuth2SessionTypePKCEChallenge, signature)
 }
 
 // GetPKCERequestSession gets the authorization request for a given PKCE request.
 // This implements a portion of pkce.PKCERequestStorage.
-func (s *Store) GetPKCERequestSession(ctx context.Context, signature string, session fosite.Session) (requester fosite.Requester, err error) {
+func (s *Store) GetPKCERequestSession(ctx context.Context, signature string, session oauthelia2.Session) (requester oauthelia2.Requester, err error) {
 	return s.loadRequesterBySignature(ctx, storage.OAuth2SessionTypePKCEChallenge, signature, session)
 }
 
-// CreateOpenIDConnectSession creates an open id connect session for a given authorize code.
-// This is relevant for explicit open id connect flow.
+// SetPKCEChallengeUsed atomically records that the client used the 'code_challenge' in an accepted authorization
+// request until expiresAt. It returns the oauthelia2.ErrPKCEChallengeReused error when the client already used the
+// challenge and that record has not expired.
+// This implements a portion of pkce.Storage.
+func (s *Store) SetPKCEChallengeUsed(ctx context.Context, clientID, challenge string, expiresAt time.Time) (err error) {
+	return s.setRequestReplay(ctx, model.OAuth2RequestReplayTypePKCEChallenge, clientID, challenge, expiresAt, oauthelia2.ErrPKCEChallengeReused)
+}
+
+// SetOpenIDConnectNonceUsed atomically records that the client used the 'nonce' in an accepted authentication request
+// until expiresAt. It returns the oauthelia2.ErrOpenIDConnectNonceReused error when the client already used the nonce
+// and that record has not expired.
 // This implements a portion of openid.OpenIDConnectRequestStorage.
-func (s *Store) CreateOpenIDConnectSession(ctx context.Context, authorizeCode string, request fosite.Requester) (err error) {
+func (s *Store) SetOpenIDConnectNonceUsed(ctx context.Context, clientID, nonce string, expiresAt time.Time) (err error) {
+	return s.setRequestReplay(ctx, model.OAuth2RequestReplayTypeOpenIDConnectNonce, clientID, nonce, expiresAt, oauthelia2.ErrOpenIDConnectNonceReused)
+}
+
+// CreateOpenIDConnectSession creates an OpenID Connect 1.0 connect session for a given authorize code.
+// This is relevant for explicit OpenID Connect 1.0 flow.
+// This implements a portion of openid.OpenIDConnectRequestStorage.
+func (s *Store) CreateOpenIDConnectSession(ctx context.Context, authorizeCode string, request oauthelia2.Requester) (err error) {
 	return s.saveSession(ctx, storage.OAuth2SessionTypeOpenIDConnect, authorizeCode, request)
 }
 
 // DeleteOpenIDConnectSession just implements the method required by fosite even though it's unused.
 // This implements a portion of openid.OpenIDConnectRequestStorage.
 func (s *Store) DeleteOpenIDConnectSession(ctx context.Context, authorizeCode string) (err error) {
-	return s.revokeSessionBySignature(ctx, storage.OAuth2SessionTypeAccessToken, authorizeCode)
+	return s.revokeSessionBySignature(ctx, storage.OAuth2SessionTypeOpenIDConnect, authorizeCode)
 }
 
 // GetOpenIDConnectSession returns error:
@@ -262,55 +396,166 @@ func (s *Store) DeleteOpenIDConnectSession(ctx context.Context, authorizeCode st
 // - ErrNoSessionFound if no session was found
 // - or an arbitrary error if an error occurred.
 // This implements a portion of openid.OpenIDConnectRequestStorage.
-func (s *Store) GetOpenIDConnectSession(ctx context.Context, authorizeCode string, request fosite.Requester) (r fosite.Requester, err error) {
+func (s *Store) GetOpenIDConnectSession(ctx context.Context, authorizeCode string, request oauthelia2.Requester) (r oauthelia2.Requester, err error) {
 	return s.loadRequesterBySignature(ctx, storage.OAuth2SessionTypeOpenIDConnect, authorizeCode, request.GetSession())
 }
 
-// CreatePARSession stores the pushed authorization request context. The requestURI is used to derive the key.
-// This implements a portion of fosite.PARStorage.
-func (s *Store) CreatePARSession(ctx context.Context, requestURI string, request fosite.AuthorizeRequester) (err error) {
-	var par *model.OAuth2PARContext
-
-	if par, err = model.NewOAuth2PARContext(requestURI, request); err != nil {
+// CreateDeviceCodeSession implements the oauth2.DeviceCodeStorage interface. It returns the
+// oauthelia2.ErrDuplicateUserCode error when the user code is already in use.
+func (s *Store) CreateDeviceCodeSession(ctx context.Context, signature string, request oauthelia2.DeviceAuthorizeRequester) (err error) {
+	session, err := model.NewOAuth2DeviceCodeSessionFromRequest(request)
+	if err != nil {
 		return err
 	}
 
-	return s.provider.SaveOAuth2PARContext(ctx, *par)
+	if err = s.provider.SaveOAuth2DeviceCodeSession(ctx, session); err != nil && storage.IsUniqueConstraintViolation(err) {
+		return oauthelia2.ErrDuplicateUserCode
+	}
+
+	return errStorage(err)
+}
+
+// UpdateDeviceCodeSession implements the oauth2.DeviceCodeStorage interface.
+func (s *Store) UpdateDeviceCodeSession(ctx context.Context, signature string, request oauthelia2.DeviceAuthorizeRequester) (err error) {
+	session, err := model.NewOAuth2DeviceCodeSessionFromRequest(request)
+	if err != nil {
+		return err
+	}
+
+	return errStorage(s.provider.UpdateOAuth2DeviceCodeSessionData(ctx, session))
+}
+
+// DecideDeviceCodeSession stores the device code session only while the stored session is undecided, checking and
+// writing it in one atomic operation. It returns the oauthelia2.ErrDeviceAuthorizeDecided error when the stored
+// session was already decided, and the oauthelia2.ErrNotFound error when no session is stored for the device code.
+// This implements rfc8628.DecisionStorage.
+func (s *Store) DecideDeviceCodeSession(ctx context.Context, signature string, request oauthelia2.DeviceAuthorizeRequester) (err error) {
+	session, err := model.NewOAuth2DeviceCodeSessionFromRequest(request)
+	if err != nil {
+		return err
+	}
+
+	if err = s.provider.DecideOAuth2DeviceCodeSession(ctx, session); !errors.Is(err, storage.ErrNoRowsAffected) {
+		return errStorage(err)
+	}
+
+	if _, err = s.provider.LoadOAuth2DeviceCodeSession(ctx, signature); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return oauthelia2.ErrNotFound
+		}
+
+		return errStorage(err)
+	}
+
+	return oauthelia2.ErrDeviceAuthorizeDecided
+}
+
+// GetDeviceCodeSession implements the oauth2.DeviceCodeStorage interface. If the device code has been invalidated
+// it returns the request along with the oauthelia2.ErrInvalidatedDeviceCode error.
+func (s *Store) GetDeviceCodeSession(ctx context.Context, signature string, session oauthelia2.Session) (request oauthelia2.DeviceAuthorizeRequester, err error) {
+	data, err := s.provider.LoadOAuth2DeviceCodeSession(ctx, signature)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, oauthelia2.ErrNotFound
+		}
+
+		return nil, errStorage(err)
+	}
+
+	return s.toDeviceCodeRequest(ctx, data, session)
+}
+
+// InvalidateDeviceCodeSession implements the oauth2.DeviceCodeStorage interface. It returns the
+// oauthelia2.ErrInvalidatedDeviceCode error when the device code was already invalidated.
+func (s *Store) InvalidateDeviceCodeSession(ctx context.Context, signature string) (err error) {
+	if err = s.provider.DeactivateOAuth2Session(ctx, storage.OAuth2SessionTypeDeviceAuthorizeCode, signature); errors.Is(err, storage.ErrNoRowsAffected) {
+		return oauthelia2.ErrInvalidatedDeviceCode
+	}
+
+	return errStorage(err)
+}
+
+// GetDeviceCodeSessionByUserCode implements the oauth2.DeviceCodeStorage interface. It returns the
+// oauthelia2.ErrNotFound error when no session exists for the user code, and the request along with the
+// oauthelia2.ErrInvalidatedDeviceCode error when its device code has been invalidated.
+func (s *Store) GetDeviceCodeSessionByUserCode(ctx context.Context, signature string, session oauthelia2.Session) (request oauthelia2.DeviceAuthorizeRequester, err error) {
+	data, err := s.provider.LoadOAuth2DeviceCodeSessionByUserCode(ctx, signature)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, oauthelia2.ErrNotFound
+		}
+
+		return nil, errStorage(err)
+	}
+
+	return s.toDeviceCodeRequest(ctx, data, session)
+}
+
+func (s *Store) toDeviceCodeRequest(ctx context.Context, data *model.OAuth2DeviceCodeSession, session oauthelia2.Session) (request oauthelia2.DeviceAuthorizeRequester, err error) {
+	if session == nil {
+		session = NewSession()
+	}
+
+	if request, err = data.ToRequest(ctx, session, s); err != nil {
+		return nil, err
+	}
+
+	restoreClaimsRequest(request)
+
+	if !data.Active {
+		return request, oauthelia2.ErrInvalidatedDeviceCode
+	}
+
+	return request, nil
+}
+
+// CreatePARSession stores the pushed authorization request context. The requestURI is used to derive the key.
+// This implements a portion of oauthelia2.PARStorage.
+func (s *Store) CreatePARSession(ctx context.Context, requestURI string, request oauthelia2.AuthorizeRequester) (err error) {
+	var par *model.OAuth2PushedAuthorizationSession
+
+	if par, err = model.NewOAuth2PushedAuthorizationSession(requestURI, request); err != nil {
+		return err
+	}
+
+	return errStorage(s.provider.SaveOAuth2PushedAuthorizationSession(ctx, *par))
 }
 
 // GetPARSession gets the push authorization request context. The caller is expected to merge the AuthorizeRequest.
-// This implements a portion of fosite.PARStorage.
-func (s *Store) GetPARSession(ctx context.Context, requestURI string) (request fosite.AuthorizeRequester, err error) {
-	var par *model.OAuth2PARContext
+// This implements a portion of oauthelia2.PARStorage.
+func (s *Store) GetPARSession(ctx context.Context, requestURI string) (request oauthelia2.AuthorizeRequester, err error) {
+	var par *model.OAuth2PushedAuthorizationSession
 
-	if par, err = s.provider.LoadOAuth2PARContext(ctx, requestURI); err != nil {
-		return nil, err
+	if par, err = s.provider.LoadOAuth2PushedAuthorizationSession(ctx, requestURI); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, oauthelia2.ErrNotFound.WithHint("The requested PAR session was not found, was expired, or was otherwise invalid.")
+		}
+
+		if storage.IsSerializationFailure(err) {
+			return nil, errStorage(err)
+		}
+
+		return nil, oauthelia2.ErrServerError.WithWrap(err).WithHintf("Error occurred retrieving the PAR session from storage: %v", err)
+	}
+
+	if par.Revoked {
+		return nil, oauthelia2.ErrNotFound.WithHint("The requested PAR session was not found, was expired, or was otherwise invalid.")
 	}
 
 	return par.ToAuthorizeRequest(ctx, NewSession(), s)
 }
 
 // DeletePARSession deletes the context.
-// This implements a portion of fosite.PARStorage.
+// This implements a portion of oauthelia2.PARStorage.
 func (s *Store) DeletePARSession(ctx context.Context, requestURI string) (err error) {
-	return s.provider.RevokeOAuth2PARContext(ctx, requestURI)
-}
-
-// IsJWTUsed implements an interface required for RFC7523.
-func (s *Store) IsJWTUsed(ctx context.Context, jti string) (used bool, err error) {
-	if err = s.ClientAssertionJWTValid(ctx, jti); err != nil {
-		return true, err
+	if err = s.provider.RevokeOAuth2PushedAuthorizationSession(ctx, requestURI); errors.Is(err, storage.ErrNoRowsAffected) {
+		return oauthelia2.ErrNotFound.WithHint("The requested PAR session was not found, was expired, or was otherwise invalid.")
 	}
 
-	return false, nil
+	return errStorage(err)
 }
 
-// MarkJWTUsedForTime implements an interface required for rfc7523.RFC7523KeyStorage.
-func (s *Store) MarkJWTUsedForTime(ctx context.Context, jti string, exp time.Time) (err error) {
-	return s.SetClientAssertionJWT(ctx, jti, exp)
-}
-
-func (s *Store) loadRequesterBySignature(ctx context.Context, sessionType storage.OAuth2SessionType, signature string, session fosite.Session) (r fosite.Requester, err error) {
+func (s *Store) loadRequesterBySignature(ctx context.Context, sessionType storage.OAuth2SessionType, signature string, session oauthelia2.Session) (r oauthelia2.Requester, err error) {
 	var (
 		sessionModel *model.OAuth2Session
 	)
@@ -319,9 +564,9 @@ func (s *Store) loadRequesterBySignature(ctx context.Context, sessionType storag
 	if err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			return nil, fosite.ErrNotFound
+			return nil, oauthelia2.ErrNotFound
 		default:
-			return nil, err
+			return nil, errStorage(err)
 		}
 	}
 
@@ -329,36 +574,90 @@ func (s *Store) loadRequesterBySignature(ctx context.Context, sessionType storag
 		return nil, err
 	}
 
-	if !sessionModel.Active && sessionType == storage.OAuth2SessionTypeAuthorizeCode {
-		return r, fosite.ErrInvalidatedAuthorizeCode
+	restoreClaimsRequest(r)
+
+	if !sessionModel.Active || sessionModel.Revoked {
+		switch sessionType {
+		case storage.OAuth2SessionTypeAuthorizeCode:
+			return r, oauthelia2.ErrInvalidatedAuthorizeCode
+		default:
+			return r, oauthelia2.ErrInactiveToken
+		}
 	}
 
 	return r, nil
 }
 
-func (s *Store) saveSession(ctx context.Context, sessionType storage.OAuth2SessionType, signature string, r fosite.Requester) (err error) {
+func (s *Store) saveSession(ctx context.Context, sessionType storage.OAuth2SessionType, signature string, r oauthelia2.Requester) (err error) {
 	var session *model.OAuth2Session
 
 	if session, err = model.NewOAuth2SessionFromRequest(signature, r); err != nil {
 		return err
 	}
 
-	return s.provider.SaveOAuth2Session(ctx, sessionType, *session)
+	return errStorage(s.provider.SaveOAuth2Session(ctx, sessionType, *session))
+}
+
+func restoreClaimsRequest(requester oauthelia2.Requester) {
+	r, ok := requester.(oauthelia2.ClaimsRequester)
+	if !ok || r.GetClaims() != nil {
+		return
+	}
+
+	if session, ok := requester.GetSession().(*Session); ok && session.ClaimRequests != nil {
+		r.SetClaims(session.ClaimRequests.ToClaimsRequest())
+	}
+}
+
+func (s *Store) setRequestReplay(ctx context.Context, replayType model.OAuth2RequestReplayType, clientID, value string, expiresAt time.Time, errReplay error) (err error) {
+	if err = s.provider.SaveOAuth2RequestReplay(ctx, model.NewOAuth2RequestReplay(replayType, clientID, value, expiresAt)); errors.Is(err, storage.ErrNoRowsAffected) {
+		return errReplay
+	}
+
+	return errStorage(err)
 }
 
 func (s *Store) revokeSessionBySignature(ctx context.Context, sessionType storage.OAuth2SessionType, signature string) (err error) {
-	return s.provider.RevokeOAuth2Session(ctx, sessionType, signature)
+	if err = s.provider.RevokeOAuth2Session(ctx, sessionType, signature); errors.Is(err, storage.ErrNoRowsAffected) {
+		return oauthelia2.ErrNotFound
+	}
+
+	return errStorage(err)
 }
 
 func (s *Store) revokeSessionByRequestID(ctx context.Context, sessionType storage.OAuth2SessionType, requestID string) (err error) {
 	if err = s.provider.RevokeOAuth2SessionByRequestID(ctx, sessionType, requestID); err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			return fosite.ErrNotFound
+			return oauthelia2.ErrNotFound
 		default:
-			return err
+			return errStorage(err)
 		}
 	}
 
 	return nil
 }
+
+func errStorage(err error) (e error) {
+	if err == nil {
+		return nil
+	}
+
+	if storage.IsSerializationFailure(err) {
+		return fmt.Errorf("%w: %w", oauthelia2.ErrSerializationFailure, err)
+	}
+
+	return err
+}
+
+var (
+	_ oauthelia2.PARStorage              = (*Store)(nil)
+	_ oauthelia2.ClientManager           = (*Store)(nil)
+	_ ostorage.Transactional             = (*Store)(nil)
+	_ oauth2.AuthorizeCodeStorage        = (*Store)(nil)
+	_ oauth2.TokenRevocationStorage      = (*Store)(nil)
+	_ openid.OpenIDConnectRequestStorage = (*Store)(nil)
+	_ rfc8628.Storage                    = (*Store)(nil)
+	_ rfc8628.DecisionStorage            = (*Store)(nil)
+	_ pkce.Storage                       = (*Store)(nil)
+)

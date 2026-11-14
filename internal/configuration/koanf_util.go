@@ -1,7 +1,12 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package configuration
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/knadh/koanf/providers/confmap"
@@ -35,53 +40,102 @@ func koanfGetKeys(ko *koanf.Koanf) (keys []string) {
 		}
 	}
 
+	sort.Strings(keys)
+
 	return keys
 }
 
-func koanfRemapKeys(val *schema.StructValidator, ko *koanf.Koanf, ds map[string]Deprecation) (final *koanf.Koanf, err error) {
+func koanfRemapKeys(val *schema.StructValidator, ko *koanf.Koanf, ds map[string]Deprecation, dms []MultiKeyMappedDeprecation) (final *koanf.Koanf, err error) {
+	km := ko.KeyMap()
 	keys := ko.All()
 
 	keys = koanfRemapKeysStandard(keys, val, ds)
 	keys = koanfRemapKeysMapped(keys, val, ds)
+	koanfRemapKeysMultiMapped(keys, val, dms)
 
-	final = koanf.New(".")
+	nested := koanfUnflattenWithKeyMap(keys, km, constDelimiter)
 
-	if err = final.Load(confmap.Provider(keys, "."), nil); err != nil {
+	final = koanf.New(constDelimiter)
+
+	if err = final.Load(confmap.Provider(nested, ""), nil); err != nil {
 		return nil, err
 	}
 
 	return final, nil
 }
 
-func koanfRemapKeysStandard(keys map[string]any, val *schema.StructValidator, ds map[string]Deprecation) (keysFinal map[string]interface{}) {
+func koanfUnflattenWithKeyMap(flat map[string]any, km koanf.KeyMap, delim string) map[string]any {
+	out := make(map[string]any)
+
+	for k, v := range flat {
+		parts, ok := km[k]
+		if !ok {
+			parts = strings.Split(k, delim)
+		}
+
+		next := out
+
+		for _, p := range parts[:len(parts)-1] {
+			sub, exists := next[p]
+			if !exists {
+				sub = make(map[string]any)
+				next[p] = sub
+			}
+
+			if n, ok := sub.(map[string]any); ok {
+				next = n
+			} else {
+				n = make(map[string]any)
+				next[p] = n
+				next = n
+			}
+		}
+
+		next[parts[len(parts)-1]] = v
+	}
+
+	return out
+}
+
+func koanfRemapKeysStandard(keys map[string]any, val *schema.StructValidator, ds map[string]Deprecation) (keysFinal map[string]any) {
 	var (
 		ok    bool
 		d     Deprecation
 		key   string
-		value interface{}
+		value any
 	)
 
-	keysFinal = make(map[string]interface{})
+	keysFinal = make(map[string]any)
 
 	for key, value = range keys {
 		if d, ok = ds[key]; ok {
 			if !d.AutoMap {
-				val.Push(fmt.Errorf("invalid configuration key '%s' was replaced by '%s'", d.Key, d.NewKey))
-
 				keysFinal[key] = value
 
+				switch {
+				case d.ErrFunc != nil:
+					d.ErrFunc(d, keysFinal, value, val)
+				case !d.AutoMap && d.NewKey == "":
+					delete(keysFinal, key)
+
+					val.PushWarning(fmt.Errorf(errFmtNoAutoMapKeyNoNewKey, d.Key, d.Version.String(), d.Version.NextMajor().String()))
+				default:
+					val.Push(fmt.Errorf("invalid configuration key '%s' was replaced by '%s'", d.Key, d.NewKey))
+				}
+
 				continue
-			} else {
-				val.PushWarning(fmt.Errorf("configuration key '%s' is deprecated in %s and has been replaced by '%s': "+
-					"this has been automatically mapped for you but you will need to adjust your configuration to remove this message", d.Key, d.Version.String(), d.NewKey))
 			}
 
 			if !mapHasKey(d.NewKey, keys) && !mapHasKey(d.NewKey, keysFinal) {
+				val.PushWarning(fmt.Errorf(errFmtAutoMapKey, d.Key, d.Version.String(), d.NewKey, d.Version.NextMajor().String()))
+
 				if d.MapFunc != nil {
 					keysFinal[d.NewKey] = d.MapFunc(value)
 				} else {
 					keysFinal[d.NewKey] = value
 				}
+			} else {
+				val.PushWarning(fmt.Errorf(errFmtAutoMapKeyExisting, d.Key, d.Version.String(), d.NewKey))
 			}
 
 			continue
@@ -93,35 +147,35 @@ func koanfRemapKeysStandard(keys map[string]any, val *schema.StructValidator, ds
 	return keysFinal
 }
 
-func koanfRemapKeysMapped(keys map[string]interface{}, val *schema.StructValidator, ds map[string]Deprecation) (keysFinal map[string]interface{}) {
+func koanfRemapKeysMapped(keys map[string]any, val *schema.StructValidator, ds map[string]Deprecation) (keysFinal map[string]any) {
 	var (
 		key           string
-		value         interface{}
-		slc, slcFinal []interface{}
+		value         any
+		slc, slcFinal []any
 		ok            bool
-		m             map[string]interface{}
+		m             map[string]any
 		d             Deprecation
 	)
 
-	keysFinal = make(map[string]interface{})
+	keysFinal = make(map[string]any)
 
 	for key, value = range keys {
-		if slc, ok = value.([]interface{}); !ok {
+		if slc, ok = value.([]any); !ok {
 			keysFinal[key] = value
 
 			continue
 		}
 
-		slcFinal = make([]interface{}, len(slc))
+		slcFinal = make([]any, len(slc))
 
 		for i, item := range slc {
-			if m, ok = item.(map[string]interface{}); !ok {
+			if m, ok = item.(map[string]any); !ok {
 				slcFinal[i] = item
 
 				continue
 			}
 
-			itemFinal := make(map[string]interface{})
+			itemFinal := make(map[string]any)
 
 			for subkey, element := range m {
 				prefix := fmt.Sprintf("%s[].", key)
@@ -136,8 +190,7 @@ func koanfRemapKeysMapped(keys map[string]interface{}, val *schema.StructValidat
 
 						continue
 					} else {
-						val.PushWarning(fmt.Errorf("configuration key '%s' is deprecated in %s and has been replaced by '%s': "+
-							"this has been automatically mapped for you but you will need to adjust your configuration to remove this message", d.Key, d.Version.String(), d.NewKey))
+						val.PushWarning(fmt.Errorf(errFmtAutoMapKey, d.Key, d.Version.String(), d.NewKey, d.Version.NextMajor().String()))
 					}
 
 					newkey := strings.Replace(d.NewKey, prefix, "", 1)
@@ -161,4 +214,30 @@ func koanfRemapKeysMapped(keys map[string]interface{}, val *schema.StructValidat
 	}
 
 	return keysFinal
+}
+
+func koanfRemapKeysMultiMapped(keys map[string]any, val *schema.StructValidator, dms []MultiKeyMappedDeprecation) {
+	for _, dm := range dms {
+		var found bool
+
+		for _, k := range dm.Keys {
+			if _, ok := keys[k]; ok {
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			continue
+		}
+
+		if v, ok := keys[dm.NewKey]; ok {
+			val.Push(fmt.Errorf(errFmtMultiKeyMappingExists, utils.StringJoinAnd(dm.Keys), dm.NewKey, v))
+
+			continue
+		}
+
+		dm.MapFunc(dm, keys, val)
+	}
 }

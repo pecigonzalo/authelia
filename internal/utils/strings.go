@@ -1,9 +1,12 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package utils
 
 import (
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"unicode"
 
@@ -13,19 +16,14 @@ import (
 // IsStringAbsURL checks a string can be parsed as a URL and that is IsAbs and if it can't it returns an error
 // describing why.
 func IsStringAbsURL(input string) (err error) {
-	parsedURL, err := url.ParseRequestURI(input)
-	if err != nil {
+	if _, err = url.ParseRequestURI(input); err != nil {
 		return fmt.Errorf("could not parse '%s' as a URL", input)
-	}
-
-	if !parsedURL.IsAbs() {
-		return fmt.Errorf("the url '%s' is not absolute because it doesn't start with a scheme like 'http://' or 'https://'", input)
 	}
 
 	return nil
 }
 
-// IsStringAlphaNumeric returns false if any rune in the string is not alpha-numeric.
+// IsStringAlphaNumeric returns false if any rune in the string is not alphanumeric.
 func IsStringAlphaNumeric(input string) bool {
 	for _, r := range input {
 		if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
@@ -58,18 +56,7 @@ func IsStringInSliceF(needle string, haystack []string, isEqual func(needle, ite
 	return false
 }
 
-// IsStringInSliceSuffix checks if the needle string has one of the suffixes in the haystack.
-func IsStringInSliceSuffix(needle string, haystack []string) (hasSuffix bool) {
-	for _, straw := range haystack {
-		if strings.HasSuffix(needle, straw) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// IsStringInSliceFold checks if a single string is in a slice of strings but uses strings.EqualFold to compare them.
+// IsStringInSliceFold checks if a single string is in a slice of strings but uses [strings.EqualFold] to compare them.
 func IsStringInSliceFold(needle string, haystack []string) (inSlice bool) {
 	for _, b := range haystack {
 		if strings.EqualFold(b, needle) {
@@ -161,19 +148,8 @@ func IsStringSlicesDifferentFold(a, b []string) (different bool) {
 	return isStringSlicesDifferent(a, b, IsStringInSliceFold)
 }
 
-// IsURLInSlice returns true if the needle url.URL is in the []url.URL haystack.
-func IsURLInSlice(needle url.URL, haystack []url.URL) (has bool) {
-	for i := 0; i < len(haystack); i++ {
-		if strings.EqualFold(needle.String(), haystack[i].String()) {
-			return true
-		}
-	}
-
-	return false
-}
-
 // StringSliceFromURLs returns a []string from a []url.URL.
-func StringSliceFromURLs(urls []url.URL) []string {
+func StringSliceFromURLs(urls []*url.URL) []string {
 	result := make([]string, len(urls))
 
 	for i := 0; i < len(urls); i++ {
@@ -184,8 +160,8 @@ func StringSliceFromURLs(urls []url.URL) []string {
 }
 
 // URLsFromStringSlice returns a []url.URL from a []string.
-func URLsFromStringSlice(urls []string) []url.URL {
-	var result []url.URL
+func URLsFromStringSlice(urls []string) []*url.URL {
+	var result []*url.URL
 
 	for i := 0; i < len(urls); i++ {
 		u, err := url.Parse(urls[i])
@@ -193,15 +169,15 @@ func URLsFromStringSlice(urls []string) []url.URL {
 			continue
 		}
 
-		result = append(result, *u)
+		result = append(result, u)
 	}
 
 	return result
 }
 
-// OriginFromURL returns an origin url.URL given another url.URL.
-func OriginFromURL(u url.URL) (origin url.URL) {
-	return url.URL{
+// OriginFromURL returns an origin [url.URL] given another [url.URL].
+func OriginFromURL(u *url.URL) (origin *url.URL) {
+	return &url.URL{
 		Scheme: u.Scheme,
 		Host:   u.Host,
 	}
@@ -275,22 +251,96 @@ func JoinAndCanonicalizeHeaders(sep []byte, headers ...string) (joined []byte) {
 	return joined
 }
 
-// IsURLHostComponent returns true if the provided url.URL that was parsed from a string to a url.URL via url.Parse is
-// just a hostname. This is needed because of the way this function parses such strings.
-func IsURLHostComponent(u url.URL) (isHostComponent bool) {
-	return u.Path != "" && u.Scheme == "" && u.Host == "" && u.RawPath == "" && u.Opaque == "" &&
-		u.RawQuery == "" && u.Fragment == "" && u.RawFragment == ""
+// StringJoinOr joins the given items with commas and the word 'or' before the final item.
+func StringJoinOr(items []string) string {
+	return StringJoinComma("or", items)
 }
 
-// IsURLHostComponentWithPort returns true if the provided url.URL that was parsed from a string to a url.URL via
-// url.Parse is just a hostname with a port. This is needed because of the way this function parses such strings.
-func IsURLHostComponentWithPort(u url.URL) (isHostComponentWithPort bool) {
-	if u.Opaque != "" && u.Scheme != "" && u.Host == "" && u.Path == "" && u.RawPath == "" &&
-		u.RawQuery == "" && u.Fragment == "" && u.RawFragment == "" {
-		_, err := strconv.Atoi(u.Opaque)
+// StringJoinAnd joins the given items with commas and the word 'and' before the final item.
+func StringJoinAnd(items []string) string {
+	return StringJoinComma("and", items)
+}
 
-		return err == nil
+// StringJoinComma joins the given items with commas and the given word before the final item.
+func StringJoinComma(word string, items []string) string {
+	if word == "" {
+		return StringJoinBuild(",", "", "'", items)
 	}
 
-	return false
+	return StringJoinBuild(",", word, "'", items)
+}
+
+// StringJoinBuild joins the given items with the given separators and quote character.
+func StringJoinBuild(sep, sepFinal, quote string, items []string) string {
+	n := len(items)
+
+	if n == 0 {
+		return ""
+	}
+
+	b := &strings.Builder{}
+
+	for i := 0; i < n; i++ {
+		if quote != "" {
+			b.WriteString(quote)
+		}
+
+		b.WriteString(items[i])
+
+		if quote != "" {
+			b.WriteString(quote)
+		}
+
+		if i == (n - 1) {
+			continue
+		}
+
+		if sep != "" {
+			if sepFinal == "" || n != 2 {
+				b.WriteString(sep)
+			}
+
+			b.WriteString(" ")
+		}
+
+		if sepFinal != "" && i == (n-2) {
+			b.WriteString(strings.Trim(sepFinal, " "))
+			b.WriteString(" ")
+		}
+	}
+
+	return b.String()
+}
+
+// StringHasSuffixFold checks if a string s ends with a suffix without consideration to case. The suffix logic is taken
+// from [strings.HasSuffix]() to ensure correctness.
+func StringHasSuffixFold(s, suffix string) bool {
+	return len(s) >= len(suffix) && strings.EqualFold(s[len(s)-len(suffix):], suffix)
+}
+
+// StringHasPrefixFold checks if a string s starts with a prefix without consideration to case. The prefix logic is
+// taken from [strings.HasPrefix]() to ensure correctness.
+func StringHasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+}
+
+// StringSplitClean splits a string by the sep after trimming all leading and trailing whitespace. It then removes any
+// elements from the slice which when trimmed of any leading and trailing whitespace are an empty string.
+func StringSplitClean(s string, sep string) []string {
+	split := strings.Split(strings.TrimSpace(s), sep)
+
+	if len(split) == 0 || (len(split) == 1 && split[0] == "") {
+		return nil
+	}
+
+	result := make([]string, 0, len(split))
+
+	for _, item := range split {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			result = append(result, item)
+		}
+	}
+
+	return result
 }

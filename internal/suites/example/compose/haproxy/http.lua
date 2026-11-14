@@ -1,3 +1,8 @@
+-- SPDX-FileCopyrightText: 2017-2020 Adis Nezirović <anezirovic@haproxy.com>
+-- SPDX-FileCopyrightText: 2017-2020 HAProxy Technologies, LLC.
+--
+-- SPDX-License-Identifier: Apache-2.0
+
 --
 -- HTTP 1.1 library for HAProxy Lua modules
 --
@@ -23,8 +28,6 @@
 -- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
---
--- SPDX-License-Identifier: Apache-2.0
 
 local _author = "Adis Nezirovic <anezirovic@haproxy.com>"
 local _copyright = "Copyright 2017-2020. HAProxy Technologies, LLC."
@@ -752,9 +755,9 @@ M.base64 = {}
 --- URL safe base64 encoder
 --
 -- Padding ('=') is omited, as permited per RFC
---   https://datatracker.ietf.org/doc/html/rfc4648
+--   https://tools.ietf.org/html/rfc4648
 -- in order to follow JSON Web Signature RFC
---   https://datatracker.ietf.org/doc/html/rfc7515
+--   https://tools.ietf.org/html/rfc7515
 --
 -- @param s String (can be binary data) to encode
 -- @param enc Function which implements base64 encoder (e.g. HAProxy base64 fetch)

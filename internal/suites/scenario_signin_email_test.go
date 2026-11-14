@@ -1,6 +1,8 @@
-package suites
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
 
-// This scenario is used to test sign in using the user email address.
+package suites
 
 import (
 	"context"
@@ -23,8 +25,7 @@ func NewSigninEmailScenario() *SigninEmailScenario {
 }
 
 func (s *SigninEmailScenario) SetupSuite() {
-	browser, err := StartRod()
-
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -33,16 +34,14 @@ func (s *SigninEmailScenario) SetupSuite() {
 }
 
 func (s *SigninEmailScenario) TearDownSuite() {
-	err := s.RodSession.Stop()
-
+	err := s.Stop()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
 func (s *SigninEmailScenario) SetupTest() {
-	s.Page = s.doCreateTab(s.T(), HomeBaseURL)
-	s.verifyIsHome(s.T(), s.Page)
+	s.doSetupTest(HomeBaseURL)
 }
 
 func (s *SigninEmailScenario) TearDownTest() {
@@ -52,6 +51,7 @@ func (s *SigninEmailScenario) TearDownTest() {
 
 func (s *SigninEmailScenario) TestShouldSignInWithUserEmail() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)

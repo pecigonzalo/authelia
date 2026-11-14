@@ -1,0 +1,20 @@
+---
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+title: "Brynn Crowley"
+description: "The contributor profile for Brynn Crowley who is a core team member and maintainer of the Authelia open-source authentication and authorization server project."
+summary: "Maintainer of Authelia."
+date: 2024-11-09T03:22:03+00:00
+lastmod: 2024-11-09T06:00:14+11:00
+draft: false
+avatar: ""
+seo:
+  title: "" # custom title (optional)
+  description: "" # custom description (recommended)
+  canonical: "" # custom canonical URL (optional)
+  noindex: false # false (default) or true
+---
+
+{{< profile-details name="brynn-crowley" >}}

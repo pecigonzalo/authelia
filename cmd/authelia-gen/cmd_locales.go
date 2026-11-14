@@ -1,17 +1,17 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/text/language"
-	"golang.org/x/text/language/display"
 
 	"github.com/authelia/authelia/v4/internal/utils"
 )
@@ -30,8 +30,9 @@ func newLocalesCmd() *cobra.Command {
 
 func localesRunE(cmd *cobra.Command, args []string) (err error) {
 	var (
-		root, pathLocales                       string
-		pathWebI18NIndex, pathDocsDataLanguages string
+		root, pathLocales     string
+		pathWebI18NIndex      string
+		pathDocsDataLanguages string
 	)
 
 	if root, err = cmd.Flags().GetString(cmdFlagRoot); err != nil {
@@ -50,166 +51,86 @@ func localesRunE(cmd *cobra.Command, args []string) (err error) {
 		return err
 	}
 
-	data, err := getLanguages(filepath.Join(root, pathLocales))
-	if err != nil {
+	var data *utils.Languages
+
+	if data, err = utils.GetDirectoryLanguages(filepath.Join(root, pathLocales)); err != nil {
 		return err
 	}
 
-	fullPathWebI18NIndex := filepath.Join(root, pathWebI18NIndex)
+	fWriteWebI18NIndex := func(path string, data *utils.Languages) (err error) {
+		var (
+			f *os.File
+		)
 
-	var (
-		f        *os.File
-		dataJSON []byte
-	)
+		if f, err = os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0600); err != nil {
+			return fmt.Errorf("failed to write file '%s': %w", path, err)
+		}
 
-	if f, err = os.Create(fullPathWebI18NIndex); err != nil {
-		return fmt.Errorf("failed to create file '%s': %w", fullPathWebI18NIndex, err)
+		defer func() {
+			_ = f.Close()
+		}()
+
+		type valueType struct {
+			Languages    map[string][]string
+			LanguageKeys []string
+
+			Data *utils.Languages
+		}
+
+		values := &valueType{
+			Languages:    map[string][]string{},
+			LanguageKeys: []string{},
+			Data:         data,
+		}
+
+		for _, language := range data.Languages {
+			values.LanguageKeys = append(values.LanguageKeys, language.Locale)
+			values.Languages[language.Locale] = language.Fallbacks
+		}
+
+		values.LanguageKeys = append(values.LanguageKeys, "default")
+		values.Languages["default"] = []string{values.Data.Defaults.Language.Locale}
+
+		sort.Strings(values.LanguageKeys)
+
+		if err = tmplWebI18NIndex.Execute(f, values); err != nil {
+			return err
+		}
+
+		return nil
 	}
 
-	if err = tmplWebI18NIndex.Execute(f, data); err != nil {
+	fWriteDocsDataLanguages := func(path string, data *utils.Languages) (err error) {
+		var (
+			f *os.File
+		)
+
+		if f, err = os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0600); err != nil {
+			return fmt.Errorf("failed to write file '%s': %w", path, err)
+		}
+
+		defer func() {
+			_ = f.Close()
+		}()
+
+		encoder := json.NewEncoder(f)
+
+		encoder.SetIndent("", "  ")
+
+		if err = encoder.Encode(data); err != nil {
+			return fmt.Errorf("failed to encode json data: %w", err)
+		}
+
+		return nil
+	}
+
+	if err = fWriteWebI18NIndex(pathWebI18NIndex, data); err != nil {
 		return err
 	}
 
-	if dataJSON, err = json.Marshal(data); err != nil {
+	if err = fWriteDocsDataLanguages(pathDocsDataLanguages, data); err != nil {
 		return err
-	}
-
-	fullPathDocsDataLanguages := filepath.Join(root, pathDocsDataLanguages)
-
-	if err = os.WriteFile(fullPathDocsDataLanguages, dataJSON, 0600); err != nil {
-		return fmt.Errorf("failed to write file '%s': %w", fullPathDocsDataLanguages, err)
 	}
 
 	return nil
-}
-
-//nolint:gocyclo
-func getLanguages(dir string) (languages *Languages, err error) {
-	//nolint:prealloc
-	var locales []string
-
-	languages = &Languages{
-		Defaults: DefaultsLanguages{
-			Namespace: localeNamespaceDefault,
-		},
-	}
-
-	var defaultTag language.Tag
-
-	if defaultTag, err = language.Parse(localeDefault); err != nil {
-		return nil, fmt.Errorf("failed to parse default language: %w", err)
-	}
-
-	languages.Defaults.Language = Language{
-		Display: display.English.Tags().Name(defaultTag),
-		Locale:  localeDefault,
-	}
-
-	if err = filepath.Walk(dir, func(path string, info fs.FileInfo, errWalk error) (err error) {
-		if errWalk != nil {
-			return errWalk
-		}
-
-		nameLower := strings.ToLower(info.Name())
-		ext := filepath.Ext(nameLower)
-		ns := strings.Replace(nameLower, ext, "", 1)
-
-		if ext != ".json" {
-			return nil
-		}
-
-		if !utils.IsStringInSlice(ns, languages.Namespaces) {
-			languages.Namespaces = append(languages.Namespaces, ns)
-		}
-
-		fdir, _ := filepath.Split(path)
-
-		locale := filepath.Base(fdir)
-
-		if utils.IsStringInSlice(locale, locales) {
-			for i, l := range languages.Languages {
-				if l.Locale == locale {
-					if utils.IsStringInSlice(ns, languages.Languages[i].Namespaces) {
-						break
-					}
-
-					languages.Languages[i].Namespaces = append(languages.Languages[i].Namespaces, ns)
-					break
-				}
-			}
-
-			return nil
-		}
-
-		var localeReal string
-
-		parts := strings.SplitN(locale, "-", 2)
-		if len(parts) == 2 && strings.EqualFold(parts[0], parts[1]) {
-			localeReal = parts[0]
-		} else {
-			localeReal = locale
-		}
-
-		var tag language.Tag
-
-		if tag, err = language.Parse(localeReal); err != nil {
-			return fmt.Errorf("failed to parse language '%s': %w", localeReal, err)
-		}
-
-		l := Language{
-			Display:    display.English.Tags().Name(tag),
-			Locale:     localeReal,
-			Namespaces: []string{ns},
-			Fallbacks:  []string{languages.Defaults.Language.Locale},
-			Tag:        tag,
-		}
-
-		languages.Languages = append(languages.Languages, l)
-
-		locales = append(locales, l.Locale)
-
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-
-	var langs []Language //nolint:prealloc
-
-	for i, lang := range languages.Languages {
-		p := lang.Tag.Parent()
-
-		if p.String() == "und" || strings.Contains(p.String(), "-") {
-			continue
-		}
-
-		if utils.IsStringInSlice(p.String(), locales) {
-			continue
-		}
-
-		if p.String() != lang.Locale {
-			lang.Fallbacks = append([]string{p.String()}, lang.Fallbacks...)
-		}
-
-		languages.Languages[i] = lang
-
-		l := Language{
-			Display:    display.English.Tags().Name(p),
-			Locale:     p.String(),
-			Namespaces: lang.Namespaces,
-			Fallbacks:  []string{languages.Defaults.Language.Locale},
-			Tag:        p,
-		}
-
-		langs = append(langs, l)
-
-		locales = append(locales, l.Locale)
-	}
-
-	languages.Languages = append(languages.Languages, langs...)
-
-	sort.Slice(languages.Languages, func(i, j int) bool {
-		return languages.Languages[i].Locale == localeDefault || languages.Languages[i].Locale < languages.Languages[j].Locale
-	})
-
-	return languages, nil
 }

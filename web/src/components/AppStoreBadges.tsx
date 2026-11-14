@@ -1,15 +1,16 @@
-import React from "react";
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
 
-import { Box, Link, Theme } from "@mui/material";
-import makeStyles from "@mui/styles/makeStyles";
+import { cn } from "cn";
 
 import AppleStore from "@assets/images/applestore-badge.svg";
 import GooglePlay from "@assets/images/googleplay-badge.svg";
 
 export interface Props {
     iconSize: number;
-    googlePlayLink: string;
-    appleStoreLink: string;
+    appleStoreLink?: string;
+    googlePlayLink?: string;
 
     targetBlank?: boolean;
     className?: string;
@@ -18,21 +19,19 @@ export interface Props {
 const AppStoreBadges = function (props: Props) {
     const target = props.targetBlank ? "_blank" : undefined;
 
-    const styles = makeStyles((theme: Theme) => ({
-        badge: {
-            width: props.iconSize,
-        },
-    }))();
-
     return (
-        <Box className={props.className}>
-            <Link href={props.googlePlayLink} target={target} underline="hover">
-                <img src={GooglePlay} alt="google play" className={styles.badge} />
-            </Link>
-            <Link href={props.appleStoreLink} target={target} underline="hover">
-                <img src={AppleStore} alt="apple store" className={styles.badge} />
-            </Link>
-        </Box>
+        <div className={cn("flex items-center justify-center gap-2", props.className)}>
+            {props.appleStoreLink ? (
+                <a href={props.appleStoreLink} target={target} className="hover:underline">
+                    <img src={AppleStore} alt="apple store" width={props.iconSize} />
+                </a>
+            ) : null}
+            {props.googlePlayLink ? (
+                <a href={props.googlePlayLink} target={target} className="hover:underline">
+                    <img src={GooglePlay} alt="google play" width={props.iconSize} />
+                </a>
+            ) : null}
+        </div>
     );
 };
 

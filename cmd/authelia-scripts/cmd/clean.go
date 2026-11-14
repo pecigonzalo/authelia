@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package cmd
 
 import (
@@ -23,9 +27,9 @@ func newCleanCmd() (cmd *cobra.Command) {
 }
 
 func cmdCleanRun(_ *cobra.Command, _ []string) {
-	log.Debug("Removing `" + OutputDir + "` directory")
-	err := os.RemoveAll(OutputDir)
+	log.Debug("Removing `" + OutputDir + txtDirectoryTidle)
 
+	err := os.RemoveAll(OutputDir)
 	if err != nil {
 		panic(err)
 	}

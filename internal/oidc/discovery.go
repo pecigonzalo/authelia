@@ -1,111 +1,67 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package oidc
 
-import (
-	"github.com/authelia/authelia/v4/internal/configuration/schema"
-)
-
-// NewOpenIDConnectWellKnownConfiguration generates a new OpenIDConnectWellKnownConfiguration.
-func NewOpenIDConnectWellKnownConfiguration(c *schema.OpenIDConnectConfiguration, clients map[string]*Client) (config OpenIDConnectWellKnownConfiguration) {
-	config = OpenIDConnectWellKnownConfiguration{
-		CommonDiscoveryOptions: CommonDiscoveryOptions{
-			SubjectTypesSupported: []string{
-				SubjectTypePublic,
-			},
-			ResponseTypesSupported: []string{
-				ResponseTypeAuthorizationCodeFlow,
-				ResponseTypeImplicitFlowIDToken,
-				ResponseTypeImplicitFlowToken,
-				ResponseTypeImplicitFlowBoth,
-				ResponseTypeHybridFlowIDToken,
-				ResponseTypeHybridFlowToken,
-				ResponseTypeHybridFlowBoth,
-			},
-			GrantTypesSupported: []string{
-				GrantTypeAuthorizationCode,
-				GrantTypeImplicit,
-				GrantTypeRefreshToken,
-			},
-			ResponseModesSupported: []string{
-				ResponseModeFormPost,
-				ResponseModeQuery,
-				ResponseModeFragment,
-			},
-			ScopesSupported: []string{
-				ScopeOfflineAccess,
-				ScopeOpenID,
-				ScopeProfile,
-				ScopeGroups,
-				ScopeEmail,
-			},
-			ClaimsSupported: []string{
-				ClaimAuthenticationMethodsReference,
-				ClaimAudience,
-				ClaimAuthorizedParty,
-				ClaimClientIdentifier,
-				ClaimExpirationTime,
-				ClaimIssuedAt,
-				ClaimIssuer,
-				ClaimJWTID,
-				ClaimRequestedAt,
-				ClaimSubject,
-				ClaimAuthenticationTime,
-				ClaimNonce,
-				ClaimPreferredEmail,
-				ClaimEmailVerified,
-				ClaimEmailAlts,
-				ClaimGroups,
-				ClaimPreferredUsername,
-				ClaimFullName,
-			},
-			TokenEndpointAuthMethodsSupported: []string{
-				ClientAuthMethodClientSecretBasic,
-				ClientAuthMethodClientSecretPost,
-				ClientAuthMethodClientSecretJWT,
-				ClientAuthMethodNone,
-			},
-		},
-		OAuth2DiscoveryOptions: OAuth2DiscoveryOptions{
-			CodeChallengeMethodsSupported: []string{
-				PKCEChallengeMethodSHA256,
-			},
-		},
-		OpenIDConnectDiscoveryOptions: OpenIDConnectDiscoveryOptions{
-			IDTokenSigningAlgValuesSupported: []string{
-				SigningAlgorithmRSAWithSHA256,
-			},
-			UserinfoSigningAlgValuesSupported: []string{
-				SigningAlgorithmNone,
-				SigningAlgorithmRSAWithSHA256,
-			},
-			RequestObjectSigningAlgValuesSupported: []string{
-				SigningAlgorithmNone,
-				SigningAlgorithmRSAWithSHA256,
-			},
-		},
-		PushedAuthorizationDiscoveryOptions: PushedAuthorizationDiscoveryOptions{
-			RequirePushedAuthorizationRequests: c.PAR.Enforce,
-		},
+// SigningAlgValuesSupported returns the JWS algorithms this Authorization Server can produce or verify a signature
+// with, followed by any extra values a particular metadata member also permits such as SigningAlgNone. The ML-DSA
+// algorithms are appended from SigningAlgsMLDSA rather than named here, so a build whose toolchain has no
+// crypto/mldsa advertises only what it can actually perform.
+func SigningAlgValuesSupported(extra ...string) (algs []string) {
+	algs = []string{
+		SigningAlgHMACUsingSHA256,
+		SigningAlgHMACUsingSHA384,
+		SigningAlgHMACUsingSHA512,
+		SigningAlgRSAUsingSHA256,
+		SigningAlgRSAUsingSHA384,
+		SigningAlgRSAUsingSHA512,
+		SigningAlgECDSAUsingP256AndSHA256,
+		SigningAlgECDSAUsingP384AndSHA384,
+		SigningAlgECDSAUsingP521AndSHA512,
+		SigningAlgRSAPSSUsingSHA256,
+		SigningAlgRSAPSSUsingSHA384,
+		SigningAlgRSAPSSUsingSHA512,
+		SigningAlgEd25519,
+		SigningAlgEdDSA,
 	}
 
-	var pairwise, public bool
+	algs = append(algs, SigningAlgsMLDSA...)
 
-	for _, client := range clients {
-		if pairwise && public {
-			break
-		}
+	return append(algs, extra...)
+}
 
-		if client.SectorIdentifier != "" {
-			pairwise = true
-		}
+// EncryptionAlgValuesSupported returns the JWE key management algorithms this Authorization Server supports.
+func EncryptionAlgValuesSupported() (algs []string) {
+	return []string{
+		EncryptionAlgRSA15,
+		EncryptionAlgRSAOAEP,
+		EncryptionAlgRSAOAEP256,
+		EncryptionAlgA128KW,
+		EncryptionAlgA192KW,
+		EncryptionAlgA256KW,
+		EncryptionAlgDirect,
+		EncryptionAlgECDHES,
+		EncryptionAlgECDHESA128KW,
+		EncryptionAlgECDHESA192KW,
+		EncryptionAlgECDHESA256KW,
+		EncryptionAlgA128GCMKW,
+		EncryptionAlgA192GCMKW,
+		EncryptionAlgA256GCMKW,
+		EncryptionAlgPBES2HS256A128KW,
+		EncryptionAlgPBES2HS284A192KW,
+		EncryptionAlgPBES2HS512A256KW,
 	}
+}
 
-	if pairwise {
-		config.SubjectTypesSupported = append(config.SubjectTypesSupported, SubjectTypePairwise)
+// EncryptionEncValuesSupported returns the JWE content encryption algorithms this Authorization Server supports.
+func EncryptionEncValuesSupported() (encs []string) {
+	return []string{
+		EncryptionEncA128CBCHS256,
+		EncryptionEncA192CBCHS384,
+		EncryptionEncA256CBCHS512,
+		EncryptionEncA128GCM,
+		EncryptionEncA192GCM,
+		EncryptionEncA256GCM,
 	}
-
-	if c.EnablePKCEPlainChallenge {
-		config.CodeChallengeMethodsSupported = append(config.CodeChallengeMethodsSupported, PKCEChallengeMethodPlain)
-	}
-
-	return config
 }

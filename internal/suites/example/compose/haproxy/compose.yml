@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+---
+services:
+  haproxy:
+    image: authelia/integration-haproxy
+    pull_policy: '${SUITE_PULL_POLICY:-missing}'
+    cpus: 2
+    mem_limit: 1g
+    volumes:
+      - './example/compose/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg'
+      - './example/compose/haproxy/http.lua:/usr/local/etc/haproxy/haproxy-lua-http/http.lua'
+      - './example/compose/haproxy/auth-request.lua:/usr/local/etc/haproxy/auth-request.lua'
+      - './common/pki:/pki'
+    networks:
+      authelianet:
+        ipv4_address: ${SUITE_SUBNET:-192.168.240}.100
+...

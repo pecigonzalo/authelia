@@ -1,0 +1,42 @@
+{
+	"Claim": "Wemukela {{name}}",
+	"Client ID": "I-ID yeKlayenti: {{client_id}}",
+	"Consent Request": "Isicelo Sokuvuma",
+	"Remember Consent": "Khumbula Ukuvuma",
+	"Scope": "Umkhawulo {{name}}",
+	"The above application is requesting the following permissions": "Uhlelo olungaphezulu luyacela izicelo ezilandelayo",
+	"This saves this consent as a pre-configured consent for future use": "Lokhu kuhlanganisa lesi sivume uko konke okuphakanyisiwe ukuze kusetshenziswe kwakusasa",
+	"claims": {
+		"address": "Ikheli Leposi",
+		"birthdate": "Usuku Lokuzalwa",
+		"email": "Ikheli le-imeyili",
+		"email_verified": "Ikheli le-imeyili (Liqinisekisiwe)",
+		"family_name": "Igama Lomndeni",
+		"gender": "Ubungozi",
+		"given_name": "Igama Elinikeziwe",
+		"groups": "Umlayezo weMigomo",
+		"locale": "Ulwimi / Iziqondiso",
+		"middle_name": "Igama Eliphakathi",
+		"name": "Igama Lokubonisa",
+		"nickname": "Igama Lokudayisa",
+		"phone_number": "Inombolo Yethelevishini",
+		"phone_number_verified": "Inombolo Yethelevishini (Iqinisiwe)",
+		"picture": "URL yePicture",
+		"preferred_username": "Igama Lokukhetha",
+		"profile": "URL yeProfile",
+		"sub": "Umfanekiso weXhumana",
+		"updated_at": "Isikhathi Sokwenziwa Kwesichazamazwi",
+		"website": "URL yeWebhusayithi",
+		"zoneinfo": "Isikhathi Sendawo"
+	},
+	"scopes": {
+		"address": "Finyelela ikheli lakho",
+		"authelia.bearer.authz": "Finyelela ezintweni ezivikelwe unjiniyela njengokuthi",
+		"email": "Finyelela emakhophi akho e-imeyili",
+		"groups": "Finyelela emalungwini akho eguma",
+		"offline_access": "Vuselela lemithetho le iyi nawe ngaphandle kokuphazanyiswa komsebenzisi",
+		"openid": "Sebenzisa i-OpenID ukuqinisekisa ubuqiniso bakho",
+		"phone": "Finyelela inombolo yakho Yethelevishini",
+		"profile": "Faka ulwazi lwakho lwephrofayela"
+	}
+}

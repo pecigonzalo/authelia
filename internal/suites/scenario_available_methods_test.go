@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -22,8 +26,7 @@ func NewAvailableMethodsScenario(methods []string) *AvailableMethodsScenario {
 }
 
 func (s *AvailableMethodsScenario) SetupSuite() {
-	browser, err := StartRod()
-
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -32,16 +35,14 @@ func (s *AvailableMethodsScenario) SetupSuite() {
 }
 
 func (s *AvailableMethodsScenario) TearDownSuite() {
-	err := s.RodSession.Stop()
-
+	err := s.Stop()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
 func (s *AvailableMethodsScenario) SetupTest() {
-	s.Page = s.doCreateTab(s.T(), HomeBaseURL)
-	s.verifyIsHome(s.T(), s.Page)
+	s.doSetupTest(HomeBaseURL)
 }
 
 func (s *AvailableMethodsScenario) TearDownTest() {
@@ -51,6 +52,7 @@ func (s *AvailableMethodsScenario) TearDownTest() {
 
 func (s *AvailableMethodsScenario) TestShouldCheckAvailableMethods() {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -58,16 +60,14 @@ func (s *AvailableMethodsScenario) TestShouldCheckAvailableMethods() {
 
 	s.doLoginOneFactor(s.T(), s.Context(ctx), "john", "password", false, BaseDomain, "")
 
-	methodsButton := s.WaitElementLocatedByID(s.T(), s.Context(ctx), "methods-button")
-	err := methodsButton.Click("left", 1)
-	s.Assert().NoError(err)
+	s.ClickElementLocatedByID(s.T(), s.Context(ctx), "methods-button")
 
 	methodsDialog := s.WaitElementLocatedByID(s.T(), s.Context(ctx), "methods-dialog")
 	options, err := methodsDialog.Elements(".method-option")
 	s.Assert().NoError(err)
 	s.Assert().Len(options, len(s.methods))
 
-	optionsList := make([]string, 0)
+	optionsList := make([]string, 0, len(options))
 
 	for _, o := range options {
 		txt, err := o.Text()

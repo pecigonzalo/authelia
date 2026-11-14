@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package middlewares
 
 import (
@@ -30,7 +34,13 @@ func (b *BridgeBuilder) WithProviders(providers Providers) *BridgeBuilder {
 
 // WithPreMiddlewares sets the Middleware's used with this BridgeBuilder which are applied before the actual Bridge.
 func (b *BridgeBuilder) WithPreMiddlewares(middlewares ...Middleware) *BridgeBuilder {
-	b.preMiddlewares = middlewares
+	for _, middleware := range middlewares {
+		if middleware == nil {
+			continue
+		}
+
+		b.preMiddlewares = append(b.preMiddlewares, middleware)
+	}
 
 	return b
 }
@@ -38,7 +48,13 @@ func (b *BridgeBuilder) WithPreMiddlewares(middlewares ...Middleware) *BridgeBui
 // WithPostMiddlewares sets the AutheliaMiddleware's used with this BridgeBuilder which are applied after the actual
 // Bridge.
 func (b *BridgeBuilder) WithPostMiddlewares(middlewares ...AutheliaMiddleware) *BridgeBuilder {
-	b.postMiddlewares = middlewares
+	for _, middleware := range middlewares {
+		if middleware == nil {
+			continue
+		}
+
+		b.postMiddlewares = append(b.postMiddlewares, middleware)
+	}
 
 	return b
 }

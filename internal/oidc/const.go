@@ -1,7 +1,14 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package oidc
 
 import (
+	"net/http"
 	"time"
+
+	oauthelia2 "authelia.com/provider/oauth2"
 )
 
 // Scope strings.
@@ -11,7 +18,20 @@ const (
 	ScopeOpenID        = "openid"
 	ScopeProfile       = "profile"
 	ScopeEmail         = "email"
+	ScopePhone         = "phone"
+	ScopeAddress       = "address"
 	ScopeGroups        = "groups"
+
+	ScopeAutheliaBearerAuthz = "authelia.bearer.authz"
+	ScopeAutheliaPAM         = "authelia.pam"
+)
+
+const (
+	fmtAutheliaOpaqueOAuth2Token = "authelia_%s_" //nolint:gosec
+)
+
+const (
+	fmtValueOAuth2AccessToken = "at"
 )
 
 // Registered Claim strings. See https://www.iana.org/assignments/jwt/jwt.xhtml.
@@ -20,35 +40,79 @@ const (
 	ClaimSessionID                           = "sid"
 	ClaimAccessTokenHash                     = "at_hash"
 	ClaimCodeHash                            = "c_hash"
+	ClaimStateHash                           = "s_hash"
 	ClaimIssuedAt                            = "iat"
 	ClaimNotBefore                           = "nbf"
 	ClaimRequestedAt                         = "rat"
 	ClaimExpirationTime                      = "exp"
 	ClaimAuthenticationTime                  = "auth_time"
-	ClaimIssuer                              = "iss"
-	ClaimSubject                             = "sub"
-	ClaimNonce                               = "nonce"
+	ClaimIssuer                              = valueIss
+	ClaimNonce                               = valueNonce
 	ClaimAudience                            = "aud"
 	ClaimGroups                              = "groups"
-	ClaimFullName                            = "name"
-	ClaimPreferredUsername                   = "preferred_username"
-	ClaimPreferredEmail                      = "email"
-	ClaimEmailVerified                       = "email_verified"
 	ClaimAuthorizedParty                     = "azp"
 	ClaimAuthenticationContextClassReference = "acr"
 	ClaimAuthenticationMethodsReference      = "amr"
-	ClaimClientIdentifier                    = "client_id"
+	ClaimClientIdentifier                    = valueClientID
+	ClaimScope                               = valueScope
+	ClaimScopeNonStandard                    = "scp"
+	ClaimExtra                               = "ext"
+	ClaimSubject                             = "sub"
+	ClaimFullName                            = "name"
+	ClaimGivenName                           = "given_name"
+	ClaimFamilyName                          = "family_name"
+	ClaimMiddleName                          = "middle_name"
+	ClaimNickname                            = "nickname"
+	ClaimPreferredUsername                   = "preferred_username"
+	ClaimProfile                             = "profile"
+	ClaimPicture                             = "picture"
+	ClaimWebsite                             = "website"
+	ClaimEmail                               = "email"
+	ClaimEmailVerified                       = "email_verified"
+	ClaimGender                              = "gender"
+	ClaimBirthdate                           = "birthdate"
+	ClaimZoneinfo                            = "zoneinfo"
+	ClaimLocale                              = "locale"
+	ClaimPhoneNumber                         = "phone_number"
+	ClaimPhoneNumberVerified                 = "phone_number_verified"
+	ClaimAddress                             = "address"
+	ClaimUpdatedAt                           = "updated_at"
+	ClaimActive                              = "active"
+	ClaimUsername                            = "username"
+	ClaimTokenIntrospection                  = "token_introspection"
+)
+
+// Claim Type strings.
+const (
+	ClaimTypeNormal = "normal"
 )
 
 const (
-	lifespanTokenDefault         = time.Hour
-	lifespanRefreshTokenDefault  = time.Hour * 24 * 30
-	lifespanAuthorizeCodeDefault = time.Minute * 15
-	lifespanPARContextDefault    = time.Minute * 5
+	lifespanTokenDefault                   = time.Hour
+	lifespanRefreshTokenDefault            = time.Hour * 24 * 30
+	lifespanAuthorizeCodeDefault           = time.Minute * 15
+	lifespanJWTSecuredAuthorizationDefault = time.Minute * 5
+	lifespanPARContextDefault              = time.Minute * 5
+	lifespanRFC8628CodeDefault             = time.Minute * 10
+	lifespanRFC8628PollingIntervalDefault  = time.Second * 10
+
+	clientAuthenticationRealm                 = "oauth2"
+	rfc8693MaxActorChainDepth                 = 8
+	lifespanVerifiableCredentialsNonceDefault = time.Hour
+	lifespanRequestObjectMaximumDefault       = time.Hour
+	jwtClockSkewDefault                       = time.Second * 10
+	jwtClockSkewMaximum                       = time.Minute
+	lifespanDPoPProofDefault                  = time.Second * 10
+	lifespanBackChannelLogoutDefault          = time.Minute * 5
 )
 
 const (
-	urnPARPrefix = "urn:ietf:params:oauth:request_uri:"
+	backChannelLogoutConcurrencyDefault = 10
+)
+
+// Redirect URI prefix strings.
+const (
+	RedirectURIPrefixPushedAuthorizationRequestURN = "urn:ietf:params:oauth:request_uri:"
 )
 
 const (
@@ -57,20 +121,24 @@ const (
 	ClaimEmailAlts = "alt_emails"
 )
 
-// Response Mode strings.
+// Response Modes strings.
 const (
-	ResponseModeQuery    = "query"
-	ResponseModeFormPost = "form_post"
-	ResponseModeFragment = "fragment"
+	ResponseModeFormPost    = "form_post"
+	ResponseModeQuery       = "query"
+	ResponseModeFragment    = "fragment"
+	ResponseModeJWT         = "jwt"
+	ResponseModeFormPostJWT = "form_post.jwt"
+	ResponseModeQueryJWT    = "query.jwt"
+	ResponseModeFragmentJWT = "fragment.jwt"
 )
 
 // Grant Type strings.
 const (
-	GrantTypeImplicit          = implicit
-	GrantTypeRefreshToken      = "refresh_token"
+	GrantTypeImplicit          = valueImplicit
+	GrantTypeRefreshToken      = valueRefreshToken
 	GrantTypeAuthorizationCode = "authorization_code"
-	GrantTypePassword          = "password"
 	GrantTypeClientCredentials = "client_credentials"
+	GrantTypeDeviceCode        = "urn:ietf:params:oauth:grant-type:device_code"
 )
 
 // Client Auth Method strings.
@@ -78,6 +146,7 @@ const (
 	ClientAuthMethodClientSecretBasic = "client_secret_basic"
 	ClientAuthMethodClientSecretPost  = "client_secret_post"
 	ClientAuthMethodClientSecretJWT   = "client_secret_jwt"
+	ClientAuthMethodPrivateKeyJWT     = "private_key_jwt"
 	ClientAuthMethodNone              = "none"
 )
 
@@ -92,10 +161,81 @@ const (
 	ResponseTypeHybridFlowBoth        = "code id_token token"
 )
 
-// Signing Algorithm strings.
+// JWS Algorithm strings.
+// See: https://datatracker.ietf.org/doc/html/rfc7518#section-3.1
 const (
-	SigningAlgorithmNone          = none
-	SigningAlgorithmRSAWithSHA256 = "RS256"
+	SigningAlgNone = valueNone
+
+	SigningAlgRSAUsingSHA256 = "RS256"
+	SigningAlgRSAUsingSHA384 = "RS384"
+	SigningAlgRSAUsingSHA512 = "RS512"
+
+	SigningAlgRSAPSSUsingSHA256 = "PS256"
+	SigningAlgRSAPSSUsingSHA384 = "PS384"
+	SigningAlgRSAPSSUsingSHA512 = "PS512"
+
+	SigningAlgECDSAUsingP256AndSHA256 = "ES256"
+	SigningAlgECDSAUsingP384AndSHA384 = "ES384"
+	SigningAlgECDSAUsingP521AndSHA512 = "ES512"
+
+	SigningAlgHMACUsingSHA256 = "HS256"
+	SigningAlgHMACUsingSHA384 = "HS384"
+	SigningAlgHMACUsingSHA512 = "HS512"
+
+	SigningAlgEd25519 = "Ed25519"
+	SigningAlgEdDSA   = "EdDSA"
+
+	SigningAlgMLDSA44 = "ML-DSA-44"
+	SigningAlgMLDSA65 = "ML-DSA-65"
+	SigningAlgMLDSA87 = "ML-DSA-87"
+)
+
+// JSON Web Encryption Algorithm strings.
+const (
+	EncryptionAlgNone             = "none"
+	EncryptionAlgRSA15            = "RSA1_5"
+	EncryptionAlgRSAOAEP          = "RSA-OAEP"
+	EncryptionAlgRSAOAEP256       = "RSA-OAEP-256"
+	EncryptionAlgA128KW           = "A128KW"
+	EncryptionAlgA192KW           = "A192KW"
+	EncryptionAlgA256KW           = "A256KW"
+	EncryptionAlgDirect           = "dir"
+	EncryptionAlgECDHES           = "ECDH-ES"
+	EncryptionAlgECDHESA128KW     = "ECDH-ES+A128KW"
+	EncryptionAlgECDHESA192KW     = "ECDH-ES+A192KW"
+	EncryptionAlgECDHESA256KW     = "ECDH-ES+A256KW"
+	EncryptionAlgA128GCMKW        = "A128GCMKW"
+	EncryptionAlgA192GCMKW        = "A192GCMKW"
+	EncryptionAlgA256GCMKW        = "A256GCMKW"
+	EncryptionAlgPBES2HS256A128KW = "PBES2-HS256+A128KW"
+	EncryptionAlgPBES2HS284A192KW = "PBES2-HS384+A192KW"
+	EncryptionAlgPBES2HS512A256KW = "PBES2-HS512+A256KW"
+)
+
+// JSON Web Encryption content-encryption strings.
+const (
+	EncryptionEncA128CBCHS256 = "A128CBC-HS256"
+	EncryptionEncA192CBCHS384 = "A192CBC-HS384"
+	EncryptionEncA256CBCHS512 = "A256CBC-HS512"
+	EncryptionEncA128GCM      = "A128GCM"
+	EncryptionEncA192GCM      = "A192GCM"
+	EncryptionEncA256GCM      = "A256GCM"
+)
+
+// JWS Algorithm Prefixes.
+const (
+	SigningAlgPrefixRSA    = "RS"
+	SigningAlgPrefixHMAC   = "HS"
+	SigningAlgPrefixRSAPSS = "PS"
+	SigningAlgPrefixECDSA  = "ES"
+	SigningAlgPrefixEdDSA  = "Ed"
+	SigningAlgPrefixMLDSA  = "ML"
+)
+
+// Key Use strings.
+const (
+	KeyUseSignature  = "sig"
+	KeyUseEncryption = "enc"
 )
 
 // Subject Type strings.
@@ -104,22 +244,81 @@ const (
 	SubjectTypePairwise = "pairwise"
 )
 
+const (
+	schemeHTTPS = "https"
+)
+
+// Application Type strings.
+const (
+	ApplicationTypeWeb    = "web"
+	ApplicationTypeNative = "native"
+)
+
 // Proof Key Code Exchange Challenge Method strings.
 const (
 	PKCEChallengeMethodPlain  = "plain"
 	PKCEChallengeMethodSHA256 = "S256"
 )
 
+// Special Redirect URI strings.
 const (
-	FormParameterRequestURI          = "request_uri"
-	FormParameterResponseMode        = "response_mode"
-	FormParameterCodeChallenge       = "code_challenge"
-	FormParameterCodeChallengeMethod = "code_challenge_method"
+	RedirectURISpecialOAuth2InstalledApp = "urn:ietf:wg:oauth:2.0:oob"
+)
+
+// Form Parameter strings.
+const (
+	FormParameterState        = "state"
+	FormParameterClientID     = valueClientID
+	FormParameterRequestURI   = "request_uri"
+	FormParameterRedirectURI  = "redirect_uri"
+	FormParameterResponseMode = "response_mode"
+	FormParameterResponseType = "response_type"
+	FormParameterScope        = valueScope
+	FormParameterPrompt       = "prompt"
+	FormParameterMaximumAge   = "max_age"
+	FormParameterClaims       = "claims"
+	FormParameterUserCode     = "user_code"
+	FormParameterFlowID       = "flow_id"
+	FormParameterNonce        = valueNonce
+)
+
+// Prompt strings.
+const (
+	PromptConsent       = "consent"
+	PromptLogin         = "login"
+	PromptNone          = valueNone
+	PromptSelectAccount = "select_account"
+	// PromptCreate  = "create" // This prompt value is currently unused.
+)
+
+// JWT Headers.
+const (
+	// JWTHeaderKeyIdentifier is the JWT Header referencing the JWS Key Identifier used to sign a token.
+	JWTHeaderKeyIdentifier = "kid"
+
+	// JWTHeaderKeyAlgorithm is the JWT Header referencing the JWS Key algorithm used to sign a token.
+	JWTHeaderKeyAlgorithm = "alg"
+
+	// JWTHeaderKeyType is the JWT Header referencing the JWT type.
+	JWTHeaderKeyType = "typ"
+)
+
+// JWT Header Type values.
+const (
+	JWTHeaderTypeValueAccessTokenJWT = "at+jwt"
+)
+
+// ID Token Audience Mode strings.
+const (
+	IDTokenAudienceModeSpecification      = "specification"
+	IDTokenAudienceModeExperimentalMerged = "experimental-merged"
 )
 
 // Endpoints.
 const (
+	EndpointConsent                    = "consent"
 	EndpointAuthorization              = "authorization"
+	EndpointDeviceAuthorization        = "device-authorization"
 	EndpointToken                      = "token"
 	EndpointUserinfo                   = "userinfo"
 	EndpointIntrospection              = "introspection"
@@ -127,36 +326,27 @@ const (
 	EndpointPushedAuthorizationRequest = "pushed-authorization-request"
 )
 
-// JWT Headers.
-const (
-	// JWTHeaderKeyIdentifier is the JWT Header referencing the JWS Key Identifier used to sign a token.
-	JWTHeaderKeyIdentifier = "kid"
-)
-
-const (
-	tokenPrefixOrgAutheliaFmt = "authelia_%s_" //nolint:gosec
-	tokenPrefixOrgOryFmt      = "ory_%s_"      //nolint:gosec
-
-	tokenPrefixPartAccessToken   = "at"
-	tokenPrefixPartRefreshToken  = "rt"
-	tokenPrefixPartAuthorizeCode = "ac"
-)
-
 // Paths.
 const (
-	EndpointPathConsent                           = "/consent"
+	FrontendEndpointPathConsentCompletion = "/consent/completion"
+
+	FrontendEndpointPathConsent                    = "/consent/openid"
+	FrontendEndpointPathConsentDecision            = FrontendEndpointPathConsent + "/decision"
+	FrontendEndpointPathConsentDeviceAuthorization = FrontendEndpointPathConsent + "/" + EndpointDeviceAuthorization
+
 	EndpointPathWellKnownOpenIDConfiguration      = "/.well-known/openid-configuration"
 	EndpointPathWellKnownOAuthAuthorizationServer = "/.well-known/oauth-authorization-server"
 	EndpointPathJWKs                              = "/jwks.json"
 
 	EndpointPathRoot = "/api/oidc"
 
-	EndpointPathAuthorization = EndpointPathRoot + "/" + EndpointAuthorization
-	EndpointPathToken         = EndpointPathRoot + "/" + EndpointToken
-	EndpointPathUserinfo      = EndpointPathRoot + "/" + EndpointUserinfo
-	EndpointPathIntrospection = EndpointPathRoot + "/" + EndpointIntrospection
-	EndpointPathRevocation    = EndpointPathRoot + "/" + EndpointRevocation
-
+	EndpointPathConsent                    = EndpointPathRoot + "/" + EndpointConsent
+	EndpointPathAuthorization              = EndpointPathRoot + "/" + EndpointAuthorization
+	EndpointPathToken                      = EndpointPathRoot + "/" + EndpointToken
+	EndpointPathUserinfo                   = EndpointPathRoot + "/" + EndpointUserinfo
+	EndpointPathIntrospection              = EndpointPathRoot + "/" + EndpointIntrospection
+	EndpointPathRevocation                 = EndpointPathRoot + "/" + EndpointRevocation
+	EndpointPathDeviceAuthorization        = EndpointPathRoot + "/" + EndpointDeviceAuthorization
 	EndpointPathPushedAuthorizationRequest = EndpointPathRoot + "/" + EndpointPushedAuthorizationRequest
 )
 
@@ -191,7 +381,7 @@ const (
 	// a user presence test. Evidence that the end user is present and interacting with the device. This is sometimes
 	// also referred to as "test of user presence" as per W3C.WD-webauthn-20170216.
 	//
-	// Authelia utilizes this when a user has used Webauthn to authenticate and the user presence flag was set.
+	// Authelia utilizes this when a user has used WebAuthn to authenticate and the user presence flag was set.
 	// Factor: Meta, Channel: Meta.
 	//
 	// RFC8176: https://datatracker.ietf.org/doc/html/rfc8176
@@ -204,7 +394,7 @@ const (
 	// containing only numbers) that a user enters to unlock a key on the device. This mechanism should have a way to
 	// deter an attacker from obtaining the PIN by trying repeated guesses.
 	//
-	// Authelia utilizes this when a user has used Webauthn to authenticate and the user verified flag was set.
+	// Authelia utilizes this when a user has used WebAuthn to authenticate and the user verified flag was set.
 	//	Factor: Meta, Channel: Meta.
 	//
 	// RFC8176: https://datatracker.ietf.org/doc/html/rfc8176
@@ -223,8 +413,8 @@ const (
 	AMRPasswordBasedAuthentication = "pwd"
 
 	// AMROneTimePassword is an RFC8176 Authentication Method Reference Value that represents authentication via a
-	// one-time password as per RFC4949. One-time password specifications that this authentication method applies to
-	// include RFC4226 and RFC6238.
+	// Time-based One-Time Password as per RFC4949. One-time password specifications that this authentication method
+	// applies to include RFC4226 and RFC6238.
 	//
 	// Authelia utilizes this when a user has used TOTP to authenticate. Factor: Have, Channel: Browser.
 	//
@@ -237,13 +427,26 @@ const (
 	// RFC6238: https://datatracker.ietf.org/doc/html/rfc6238
 	AMROneTimePassword = "otp"
 
+	// AMRProofOfPossession is an Authentication Method Reference Value that
+	// represents authentication via a proof-of-Possession (PoP) of a software-secured (swk) or hardware-secured (hwk)
+	// key.
+	AMRProofOfPossession = "pop"
+
 	// AMRHardwareSecuredKey is an RFC8176 Authentication Method Reference Value that
 	// represents authentication via a proof-of-Possession (PoP) of a hardware-secured key.
 	//
-	// Authelia utilizes this when a user has used Webauthn to authenticate. Factor: Have, Channel: Browser.
+	// Authelia utilizes this when a user has used WebAuthn to authenticate. Factor: Have, Channel: Browser.
 	//
 	// RFC8176: https://datatracker.ietf.org/doc/html/rfc8176
 	AMRHardwareSecuredKey = "hwk"
+
+	// AMRSoftwareSecuredKey is an RFC8176 Authentication Method Reference Value that
+	// represents authentication via a proof-of-Possession (PoP) of a software-secured key.
+	//
+	// Authelia utilizes this when a user has used WebAuthn to authenticate. Factor: Have, Channel: Browser.
+	//
+	// RFC8176: https://datatracker.ietf.org/doc/html/rfc8176
+	AMRSoftwareSecuredKey = "swk"
 
 	// AMRShortMessageService is an RFC8176 Authentication Method Reference Value that
 	// represents authentication via confirmation using SMS text message to the user at a registered number.
@@ -255,8 +458,35 @@ const (
 )
 
 const (
-	implicit      = "implicit"
-	explicit      = "explicit"
-	preconfigured = "pre-configured"
-	none          = "none"
+	valueScope         = "scope"
+	valueClientID      = "client_id"
+	valueImplicit      = "implicit"
+	valueExplicit      = "explicit"
+	valuePreconfigured = "pre-configured"
+	valueNone          = "none"
+	valueRefreshToken  = "refresh_token"
+	valueIss           = "iss"
+	valueNonce         = "nonce"
+)
+
+const (
+	durationZero = time.Duration(0)
+)
+
+const (
+	fieldRFC6750Error            = "error"
+	fieldRFC6750ErrorDescription = "error_description"
+	fieldRFC6750Realm            = "realm"
+	fieldRFC6750Scope            = valueScope
+)
+
+var (
+	// ErrEffectiveIssuer is returned when the effective issuer for a request cannot be determined.
+	ErrEffectiveIssuer = &oauthelia2.RFC6749Error{
+		ErrorField:       "invalid_request",
+		DescriptionField: "The request is missing a required parameter, includes an invalid parameter value, includes a parameter more than once, or is otherwise malformed.",
+		HintField:        "Make sure that the various parameters are correct, be aware of case sensitivity and trim your parameters. Make sure that the client you are using has exactly whitelisted the redirect_uri you specified.",
+		DebugField:       "Error occurred determining the effective issuer for this request. Either the server has not been setup to handle these requests, or a failure occurred looking up details for this request.",
+		CodeField:        http.StatusBadRequest,
+	}
 )

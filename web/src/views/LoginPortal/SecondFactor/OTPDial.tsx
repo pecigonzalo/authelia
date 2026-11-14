@@ -1,14 +1,16 @@
-import React, { Fragment } from "react";
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
 
-import { Theme } from "@mui/material";
-import makeStyles from "@mui/styles/makeStyles";
-import classnames from "classnames";
-import OtpInput from "react18-input-otp";
+import { Fragment, useId } from "react";
+
+import { OTPField } from "@base-ui/react/otp-field";
+import { cn } from "cn";
+import { useTranslation } from "react-i18next";
 
 import SuccessIcon from "@components/SuccessIcon";
 import TimerIcon from "@components/TimerIcon";
 import IconWithContext from "@views/LoginPortal/SecondFactor/IconWithContext";
-import { State } from "@views/LoginPortal/SecondFactor/OneTimePasswordMethod";
 
 export interface Props {
     passcode: string;
@@ -17,71 +19,77 @@ export interface Props {
     digits: number;
     period: number;
 
-    onChange: (passcode: string) => void;
+    onChange: (_passcode: string) => void;
+}
+
+export enum State {
+    Idle = 1,
+    InProgress = 2,
+    Success = 3,
+    Failure = 4,
+    RateLimited = 5,
 }
 
 const OTPDial = function (props: Props) {
-    const styles = useStyles();
+    const { t: translate } = useTranslation();
+    const fieldId = useId();
+    const disabled =
+        props.state === State.InProgress || props.state === State.Success || props.state === State.RateLimited;
 
     return (
         <IconWithContext icon={<Icon state={props.state} period={props.period} />}>
-            <span className={styles.otpInput} id="otp-input">
-                <OtpInput
-                    shouldAutoFocus
-                    onChange={props.onChange}
+            <span
+                id="otp-input"
+                className={cn(
+                    "mt-4 inline-block",
+                    "[&_input]:mx-1 [&_input]:box-border [&_input]:size-10 [&_input]:rounded-[5px] [&_input]:border [&_input]:border-input [&_input]:bg-transparent [&_input]:text-center [&_input]:text-lg [&_input]:outline-none dark:[&_input]:bg-input/30",
+                    "[&_input:focus-visible]:border-ring [&_input:focus-visible]:ring-[3px] [&_input:focus-visible]:ring-ring/50",
+                    "[&_input:disabled]:cursor-not-allowed [&_input:disabled]:opacity-50",
+                    props.state === State.Failure &&
+                        "[&_input]:border-destructive [&_input]:ring-destructive/20 [&_input:focus-visible]:border-destructive [&_input:focus-visible]:ring-destructive/20 dark:[&_input]:ring-destructive/40 dark:[&_input:focus-visible]:ring-destructive/40",
+                )}
+            >
+                <label htmlFor={fieldId} className="sr-only">
+                    {translate("Enter One-Time Password")}
+                </label>
+                <OTPField.Root
+                    id={fieldId}
+                    length={props.digits}
                     value={props.passcode}
-                    numInputs={props.digits}
-                    isDisabled={props.state === State.InProgress || props.state === State.Success}
-                    isInputNum
-                    hasErrored={props.state === State.Failure}
+                    onValueChange={props.onChange}
+                    disabled={disabled}
+                    validationType="numeric"
+                    inputMode="numeric"
                     autoComplete="one-time-code"
-                    inputStyle={classnames(
-                        styles.otpDigitInput,
-                        props.state === State.Failure ? styles.inputError : "",
-                    )}
-                />
+                >
+                    {Array.from({ length: props.digits }, (_item, index) => (
+                        <OTPField.Input
+                            key={index}
+                            autoFocus={index === 0}
+                            aria-invalid={props.state === State.Failure}
+                        />
+                    ))}
+                </OTPField.Root>
             </span>
         </IconWithContext>
     );
 };
 
-export default OTPDial;
-
-const useStyles = makeStyles((theme: Theme) => ({
-    timeProgress: {},
-    register: {
-        marginTop: theme.spacing(),
-    },
-    otpInput: {
-        display: "inline-block",
-        marginTop: theme.spacing(2),
-    },
-    otpDigitInput: {
-        boxSizing: "content-box",
-        padding: theme.spacing() + " !important",
-        marginLeft: theme.spacing(0.5),
-        marginRight: theme.spacing(0.5),
-        fontSize: "1rem",
-        borderRadius: "5px",
-        border: "1px solid rgba(0,0,0,0.3)",
-    },
-    inputError: {
-        border: "1px solid rgba(255, 2, 2, 0.95)",
-    },
-}));
-
 interface IconProps {
-    state: State;
-    period: number;
+    readonly state: State;
+    readonly period: number;
 }
 
 function Icon(props: IconProps) {
     return (
         <Fragment>
-            {props.state !== State.Success ? (
+            {props.state === State.Success ? (
+                <SuccessIcon />
+            ) : (
                 <TimerIcon backgroundColor="#000" color="#FFFFFF" width={64} height={64} period={props.period} />
-            ) : null}
-            {props.state === State.Success ? <SuccessIcon /> : null}
+            )}
         </Fragment>
     );
 }
+
+export default OTPDial;

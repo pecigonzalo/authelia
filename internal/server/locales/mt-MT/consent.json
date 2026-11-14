@@ -1,0 +1,42 @@
+{
+	"Claim": "Talba {{name}}",
+	"Client ID": "ID tal-Klijent: {{client_id}}",
+	"Consent Request": "Talba tal-Kunsens",
+	"Remember Consent": "Ftakar il-Kunsens",
+	"Scope": "Skop {{name}}",
+	"The above application is requesting the following permissions": "L-applikazzjoni ta' fuq qed titlob il-permessi li ġejjin",
+	"This saves this consent as a pre-configured consent for future use": "Dan isalva din il-kunsens bħala kunsens pre-konfigurat għall-użu fil-futur",
+	"claims": {
+		"address": "Indirizz Postali",
+		"birthdate": "Data tat-Twelid",
+		"email": "Indirizz Elettroniku",
+		"email_verified": "Indirizz Elettroniku (Verifikat)",
+		"family_name": "Isem Familjari",
+		"gender": "Ġeneru",
+		"given_name": "Isem Mogħti",
+		"groups": "Membri tal-Grup",
+		"locale": "Lingwa / Dialett",
+		"middle_name": "Ismi Tiegħi",
+		"name": "Isem tal-Wiri",
+		"nickname": "Nom de Guerre",
+		"phone_number": "Numru tat-Telefon",
+		"phone_number_verified": "Numru tat-Telefon (Verifikat)",
+		"picture": "URL tal-Immaġni",
+		"preferred_username": "Isem Utent Preferut",
+		"profile": "URL tal-Profil",
+		"sub": "Identifikatur Uniċi",
+		"updated_at": "Ħin ta' Aġġornament tal-Profil",
+		"website": "URL tal-Websajt",
+		"zoneinfo": "Żona"
+	},
+	"scopes": {
+		"address": "Aċċessa l-indirizz tiegħek",
+		"authelia.bearer.authz": "Aċċessa riżorsi protetti lura bħala inti",
+		"email": "Aċċessa l-indirizzi tal-email tiegħek",
+		"groups": "Aċċessa l-membri tal-grupp tiegħek",
+		"offline_access": "Awtomatikament aġġorna dawn il-permessi mingħajr interazzjoni tal-utent",
+		"openid": "Uża OpenID biex tivverifika l-identità tiegħek",
+		"phone": "Aċċessa n-numru tat-telefon tiegħek",
+		"profile": "Aċċessa l-informazzjoni tal-profil tiegħek"
+	}
+}

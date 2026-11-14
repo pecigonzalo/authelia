@@ -1,24 +1,40 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package storage
 
 import (
 	"regexp"
+	"time"
 )
 
 const (
 	tableAuthenticationLogs   = "authentication_logs"
+	tableBannedUser           = "banned_user"
+	tableBannedIP             = "banned_ip"
+	tableCachedData           = "cached_data"
 	tableDuoDevices           = "duo_devices"
 	tableIdentityVerification = "identity_verification"
+	tableOneTimeCode          = "one_time_code"
+	tableRecoveryCodes        = "recovery_codes"
+	tableRecoveryCodesLock    = "recovery_codes_lock"
+	tableSession              = "session"
 	tableTOTPConfigurations   = "totp_configurations"
+	tableTOTPHistory          = "totp_history"
 	tableUserOpaqueIdentifier = "user_opaque_identifier"
 	tableUserPreferences      = "user_preferences"
-	tableWebauthnDevices      = "webauthn_devices"
+	tableWebAuthnCredentials  = "webauthn_credentials" //nolint:gosec // This is a table name, not a credential.
+	tableWebAuthnUsers        = "webauthn_users"
 
 	tableOAuth2BlacklistedJTI          = "oauth2_blacklisted_jti"
+	tableOAuth2RequestReplay           = "oauth2_request_replay"
 	tableOAuth2ConsentSession          = "oauth2_consent_session"
 	tableOAuth2ConsentPreConfiguration = "oauth2_consent_preconfiguration"
 
 	tableOAuth2AccessTokenSession   = "oauth2_access_token_session" //nolint:gosec // This is not a hardcoded credential.
 	tableOAuth2AuthorizeCodeSession = "oauth2_authorization_code_session"
+	tableOAuth2DeviceCodeSession    = "oauth2_device_code_session"
 	tableOAuth2OpenIDConnectSession = "oauth2_openid_connect_session"
 	tableOAuth2PARContext           = "oauth2_par_context"
 	tableOAuth2PKCERequestSession   = "oauth2_pkce_request_session"
@@ -28,62 +44,19 @@ const (
 	tableEncryption = "encryption"
 )
 
-// OAuth2SessionType represents the potential OAuth 2.0 session types.
-type OAuth2SessionType int
-
-// Representation of specific OAuth 2.0 session types.
 const (
-	OAuth2SessionTypeAccessToken OAuth2SessionType = iota
-	OAuth2SessionTypeAuthorizeCode
-	OAuth2SessionTypeOpenIDConnect
-	OAuth2SessionTypePAR
-	OAuth2SessionTypePKCEChallenge
-	OAuth2SessionTypeRefreshToken
+	tableAADPushedAuthorizationRequestSession = "oauth2_pushed_authorization_session"
 )
 
-// String returns a string representation of this OAuth2SessionType.
-func (s OAuth2SessionType) String() string {
-	switch s {
-	case OAuth2SessionTypeAccessToken:
-		return "access token"
-	case OAuth2SessionTypeAuthorizeCode:
-		return "authorization code"
-	case OAuth2SessionTypeOpenIDConnect:
-		return "openid connect"
-	case OAuth2SessionTypePAR:
-		return "pushed authorization request context"
-	case OAuth2SessionTypePKCEChallenge:
-		return "pkce challenge"
-	case OAuth2SessionTypeRefreshToken:
-		return "refresh token"
-	default:
-		return "invalid"
-	}
-}
-
-// Table returns the table name for this session type.
-func (s OAuth2SessionType) Table() string {
-	switch s {
-	case OAuth2SessionTypeAccessToken:
-		return tableOAuth2AccessTokenSession
-	case OAuth2SessionTypeAuthorizeCode:
-		return tableOAuth2AuthorizeCodeSession
-	case OAuth2SessionTypeOpenIDConnect:
-		return tableOAuth2OpenIDConnectSession
-	case OAuth2SessionTypePAR:
-		return tableOAuth2PARContext
-	case OAuth2SessionTypePKCEChallenge:
-		return tableOAuth2PKCERequestSession
-	case OAuth2SessionTypeRefreshToken:
-		return tableOAuth2RefreshTokenSession
-	default:
-		return ""
-	}
-}
+const (
+	sessionGarbageCollectionFrequency = time.Minute * 5
+)
 
 const (
-	sqlNetworkTypeTCP        = "tcp"
-	sqlNetworkTypeUnixSocket = "unix"
+	columnSessionData = "session_data"
+	columnValue       = "value"
+	columnCode        = "code"
+	columnSecret      = "secret"
 )
 
 const (
@@ -107,10 +80,36 @@ var tablesPre1 = []string{
 }
 
 const (
-	providerAll      = "all"
+	pathMigrations   = "migrations"
 	providerMySQL    = "mysql"
 	providerPostgres = "postgres"
 	providerSQLite   = "sqlite"
+)
+
+const (
+	keyTypeCryptographyEnc  = "enc"
+	keyTypeCryptographyHMAC = "hmac"
+
+	fmtNameKeyHMAC = "hmac_key_%s"
+	fmtNameKeyEnc  = "enc_key_%s"
+)
+
+const (
+	driverParameterFmtAppName = "authelia %s"
+)
+
+const (
+	dsnFmtSQLite = "%s?_txlock=immediate"
+)
+
+const (
+	codeMySQLDuplicateEntry  uint16 = 1062
+	codeMySQLLockWaitTimeout uint16 = 1205
+	codeMySQLLockDeadlock    uint16 = 1213
+
+	codePostgresUniqueViolation      = "23505"
+	codePostgresSerializationFailure = "40001"
+	codePostgresDeadlockDetected     = "40P01"
 )
 
 const (
@@ -122,13 +121,33 @@ type ctxKey int
 
 const (
 	ctxKeyTransaction ctxKey = iota
-)
-
-var (
-	reMigration = regexp.MustCompile(`^V(?P<Version>\d{4})\.(?P<Name>[^.]+)\.(?P<Provider>(all|sqlite|postgres|mysql))\.(?P<Direction>(up|down))\.sql$`)
+	ctxKeyConnection
 )
 
 const (
-	na      = "N/A"
-	invalid = "invalid"
+	hmacNameOneTimeCode     = "otc"
+	hmacNameOneTimePassword = "otp"
+	hmacNameRecoveryCode    = "rc"
+	hmacNameSession         = "session"
+)
+
+const (
+	hkdfKeyInfo = "authelia:kdf:storage:encryption_key:v1"
+
+	// schemaVersionEncryptionKeyDerivation is the schema version at which HKDF key derivation and GCM AAD were
+	// introduced. Databases below this version store encrypted values using the legacy SHA256 key without AAD.
+	schemaVersionEncryptionKeyDerivation = 25
+
+	// schemaVersionEncryptionAADRowScoped is the schema version at which encrypted values became bound to their
+	// individual row. Databases below this version bind values to their table and column only.
+	schemaVersionEncryptionAADRowScoped = 26
+)
+
+var (
+	reMigration                  = regexp.MustCompile(`^V(?P<Version>\d{4})\.(?P<Name>[^.]+)\.(?P<Direction>(up|down))\.sql$`)
+	rePostgreSQLUnixDomainSocket = regexp.MustCompile(`^\.s\.PGSQL\.(\d+)$`)
+)
+
+const (
+	na = "N/A"
 )

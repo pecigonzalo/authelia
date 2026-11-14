@@ -1,29 +1,22 @@
-import React from "react";
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
 
-import { Theme, Typography } from "@mui/material";
-import makeStyles from "@mui/styles/makeStyles";
 import { useTranslation } from "react-i18next";
 
 import SuccessIcon from "@components/SuccessIcon";
 
 const Authenticated = function () {
-    const styles = useStyles();
     const { t: translate } = useTranslation();
+
     return (
-        <div id="authenticated-stage">
-            <div className={styles.iconContainer}>
+        <div id="authenticated-stage" className="flex flex-col items-center">
+            <div className="mb-4">
                 <SuccessIcon />
             </div>
-            <Typography>{translate("Authenticated")}</Typography>
+            <p>{translate("Authenticated")}</p>
         </div>
     );
 };
 
 export default Authenticated;
-
-const useStyles = makeStyles((theme: Theme) => ({
-    iconContainer: {
-        marginBottom: theme.spacing(2),
-        flex: "0 0 100%",
-    },
-}));

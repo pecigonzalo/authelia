@@ -1,0 +1,122 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package handlers
+
+import (
+	"time"
+
+	"github.com/authelia/authelia/v4/internal/authentication"
+	"github.com/authelia/authelia/v4/internal/middlewares"
+	"github.com/authelia/authelia/v4/internal/regulation"
+	"github.com/authelia/authelia/v4/internal/session"
+)
+
+// SecondFactorPasswordPOST is the handler performing the knowledge based authentication factor after a user utilizes a
+// alternative to usernames and passwords like passkeys.
+func SecondFactorPasswordPOST(delayer middlewares.Delayer) middlewares.RequestHandler {
+	return func(ctx *middlewares.AutheliaCtx) {
+		var successful bool
+
+		requestTime := time.Now()
+
+		if delayer != nil {
+			defer delayer.Delay(ctx, requestTime, &successful)
+		}
+
+		bodyJSON := bodySecondFactorPasswordRequest{}
+
+		var err error
+		if err = ctx.ParseBody(&bodyJSON); err != nil {
+			ctx.Logger.WithError(err).Errorf(logFmtErrParseRequestBody, regulation.AuthType1FA)
+
+			respondUnauthorized(ctx, messageAuthenticationFailed)
+
+			return
+		}
+
+		var (
+			provider    session.Strategy
+			userSession session.UserSession
+		)
+
+		if provider, err = ctx.GetSessionProvider(); err != nil {
+			ctx.Logger.WithError(err).Error("Failed to get session provider during 2FA attempt")
+
+			respondUnauthorized(ctx, messageAuthenticationFailed)
+
+			return
+		}
+
+		var current *session.UserSession
+
+		if current, err = provider.Get(ctx); err != nil {
+			ctx.Logger.Errorf("%s", err)
+
+			respondUnauthorized(ctx, messageAuthenticationFailed)
+
+			return
+		}
+
+		userSession = *current
+
+		var (
+			userPasswordOk bool
+		)
+
+		if userPasswordOk, err = ctx.Providers.UserProvider.CheckUserPassword(userSession.Username, bodyJSON.Password); err != nil {
+			doMarkAuthenticationAttempt(ctx, false, regulation.NewBan(regulation.BanTypeNone, userSession.Username, nil), regulation.AuthTypePassword, err)
+
+			respondUnauthorized(ctx, messageAuthenticationFailed)
+
+			return
+		}
+
+		if !userPasswordOk {
+			doMarkAuthenticationAttempt(ctx, false, regulation.NewBan(regulation.BanTypeNone, userSession.Username, nil), regulation.AuthTypePassword, nil)
+
+			respondUnauthorized(ctx, messageAuthenticationFailed)
+
+			return
+		}
+
+		var details *authentication.UserDetails
+
+		if details, err = ctx.GetUserProvider().GetDetails(userSession.Username); err != nil {
+			ctx.GetLogger().WithError(err).Errorf(logFmtErrObtainProfileDetails, regulation.AuthTypePassword, userSession.Username)
+
+			respondUnauthorized(ctx, messageAuthenticationFailed)
+
+			return
+		}
+
+		doMarkAuthenticationAttempt(ctx, true, regulation.NewBan(regulation.BanTypeNone, userSession.Username, nil), regulation.AuthTypePassword, nil)
+
+		userSession.SetTwoFactorPassword(ctx.GetClock().Now())
+
+		if err = ctx.RegenerateSession(); err != nil {
+			ctx.Logger.WithError(err).Errorf(logFmtErrSessionRegenerate, regulation.AuthTypePassword, userSession.Username)
+
+			respondUnauthorized(ctx, messageAuthenticationFailed)
+
+			return
+		}
+
+		if err = ctx.SaveSession(&userSession); err != nil {
+			ctx.Logger.WithError(err).Errorf(logFmtErrSessionSave, "updated profile", regulation.AuthTypePassword, logFmtActionAuthentication, userSession.Username)
+
+			respondUnauthorized(ctx, messageAuthenticationFailed)
+
+			return
+		}
+
+		successful = true
+
+		if len(bodyJSON.Flow) > 0 {
+			handleFlowResponse(ctx, &userSession, details, bodyJSON.FlowID, bodyJSON.Flow, bodyJSON.SubFlow, bodyJSON.UserCode)
+		} else {
+			Handle2FAResponse(ctx, bodyJSON.TargetURL)
+		}
+	}
+}

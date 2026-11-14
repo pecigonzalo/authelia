@@ -1,0 +1,321 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package handlers
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/authelia/authelia/v4/internal/middlewares"
+	"github.com/authelia/authelia/v4/internal/model"
+	"github.com/authelia/authelia/v4/internal/session"
+	"github.com/authelia/authelia/v4/internal/templates"
+	"github.com/authelia/authelia/v4/internal/utils"
+)
+
+// ResetPasswordDELETE handler for deleting password reset JWT's.
+func ResetPasswordDELETE(ctx *middlewares.AutheliaCtx) {
+	var (
+		issuerURL    *url.URL
+		token        *jwt.Token
+		verification *model.IdentityVerification
+		claims       *model.IdentityVerificationClaim
+		ok           bool
+		err          error
+	)
+
+	body := &bodyRequestPasswordResetDELETE{}
+
+	if err = ctx.ParseBody(body); err != nil {
+		ctx.GetLogger().WithError(err).Error("Error occurred parsing reset password delete body")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	}
+
+	if issuerURL, err = ctx.IssuerURL(); err != nil {
+		ctx.GetLogger().WithError(err).Error("Error occurred determining the issuer")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	}
+
+	if err = ctx.RegenerateSession(); err != nil {
+		ctx.GetLogger().WithError(err).Error("Error occurred regenerating user session")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	}
+
+	token, err = jwt.ParseWithClaims(body.Token, &model.IdentityVerificationClaim{},
+		func(token *jwt.Token) (any, error) {
+			return []byte(ctx.Configuration.IdentityValidation.ResetPassword.JWTSecret), nil
+		},
+		jwt.WithIssuedAt(),
+		jwt.WithStrictDecoding(),
+		jwt.WithIssuer(issuerURL.String()),
+		jwt.WithValidMethods([]string{ctx.Configuration.IdentityValidation.ResetPassword.JWTAlgorithm}),
+		ctx.GetClock().GetJWTWithTimeFuncOption(),
+	)
+
+	switch {
+	case err == nil:
+		break
+	case errors.Is(err, jwt.ErrTokenMalformed):
+		ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token as it appears to be malformed, this potentially can occur if you've not copied the full link")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	case errors.Is(err, jwt.ErrTokenExpired):
+		ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token validity period as it appears to be expired")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	case errors.Is(err, jwt.ErrTokenNotValidYet):
+		ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token validity period as it appears to only be valid in the future")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	case errors.Is(err, jwt.ErrTokenSignatureInvalid):
+		ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token signature")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	default:
+		ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	}
+
+	if claims, ok = token.Claims.(*model.IdentityVerificationClaim); !ok {
+		ctx.GetLogger().WithError(fmt.Errorf("failed to map the %T claims to a *model.IdentityVerificationClaim", claims)).Error("Error occurred validating the identity verification token claims")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	}
+
+	if verification, err = claims.ToIdentityVerification(); err != nil {
+		ctx.GetLogger().WithError(err).Error("Error occurred validating the identity verification token claims as they appear to be malformed")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	}
+
+	if verification.Action != ActionResetPassword {
+		ctx.GetLogger().Errorf("Error occurred revoking the identity verification token, the token action '%s' does not match the endpoint action '%s' which is not allowed", claims.Action, ActionResetPassword)
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	}
+
+	var full *model.IdentityVerification
+
+	if full, err = ctx.Providers.StorageProvider.LoadIdentityVerification(ctx, verification.JTI.String()); err != nil {
+		ctx.GetLogger().WithError(err).Error("Error occurred looking up identity verification during the revocation phase")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	}
+
+	if full.RevokedAt.Valid {
+		ctx.GetLogger().Error("Error occurred revoking identity verification token as it's already revoked")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	}
+
+	if err = ctx.Providers.StorageProvider.RevokeIdentityVerification(ctx, verification.JTI.String(), model.NewNullIP(ctx.RemoteIP())); err != nil {
+		ctx.GetLogger().WithError(err).Error("Error occurred revoking identity verification when attempting to save the revocation status to the database")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	}
+
+	ctx.ReplyOK()
+}
+
+// ResetPasswordPOST handler for resetting passwords.
+func ResetPasswordPOST(ctx *middlewares.AutheliaCtx) {
+	var (
+		userSession session.UserSession
+		err         error
+	)
+	if userSession, err = ctx.GetSession(); err != nil {
+		ctx.GetLogger().WithError(err).Error(errStrUserSessionData)
+		ctx.SetJSONError(messageUnableToResetPassword)
+
+		return
+	}
+
+	if err = ctx.RegenerateSession(); err != nil {
+		ctx.GetLogger().WithError(err).Error("Error occurred regenerating user session")
+		ctx.SetJSONError(messageUnableToResetPassword)
+
+		return
+	}
+
+	// Those checks unsure that the identity verification process has been initiated and completed successfully
+	// otherwise PasswordReset would not be set to true. We can improve the security of this check by making the
+	// request expire at some point because here it only expires when the cookie expires.
+	if userSession.PasswordResetUsername == nil {
+		ctx.GetLogger().Error("Error occurred resetting the password as no identity verification process has been initiated")
+		ctx.SetJSONError(messageUnableToResetPassword)
+
+		return
+	}
+
+	username := *userSession.PasswordResetUsername
+
+	var requestBody resetPasswordStep2RequestBody
+
+	if err = ctx.ParseBody(&requestBody); err != nil {
+		ctx.GetLogger().WithError(err).Error("Error occurred parsing the reset password request body")
+		ctx.SetJSONError(messageUnableToResetPassword)
+
+		return
+	}
+
+	if err = ctx.Providers.PasswordPolicy.Check(requestBody.Password); err != nil {
+		ctx.GetLogger().WithError(err).Error("Error occurred checking the new password against the password policy")
+		ctx.SetJSONError(messagePasswordWeak)
+
+		ctxLogEventPasswordResetFailure(ctx, username, eventEmailReasonPasswordPolicy)
+
+		return
+	}
+
+	if err = ctx.Providers.UserProvider.UpdatePassword(username, requestBody.Password); err != nil {
+		switch {
+		case utils.IsStringInSliceContains(err.Error(), ldapPasswordComplexityCodes),
+			utils.IsStringInSliceContains(err.Error(), ldapPasswordComplexityErrors):
+			ctx.GetLogger().WithError(err).Error("Error occurred updating the user password as it does not meet the complexity requirements of the backend")
+			ctx.SetJSONError(messagePasswordBackendComplexity)
+		default:
+			ctx.GetLogger().WithError(err).Error("Error occurred updating the user password")
+			ctx.SetJSONError(messageUnableToResetPassword)
+		}
+
+		ctxLogEventPasswordResetFailure(ctx, username, passwordResetFailureReason(err))
+
+		return
+	}
+
+	ctx.GetLogger().Debugf("Password of user %s has been reset", username)
+
+	userSession.PasswordResetUsername = nil
+
+	if err = ctx.SaveSession(&userSession); err != nil {
+		ctx.GetLogger().WithError(err).Error("Error occurred saving the session while updating the password reset state")
+		ctx.SetJSONError(messageOperationFailed)
+
+		return
+	}
+
+	userInfo, err := ctx.Providers.UserProvider.GetDetails(username)
+	if err != nil {
+		ctx.GetLogger().WithError(err).WithFields(map[string]any{"username": username}).Error("Error occurred retrieving user details")
+		ctx.ReplyOK()
+
+		return
+	}
+
+	if len(userInfo.Emails) == 0 {
+		ctx.GetLogger().WithFields(map[string]any{"username": username}).Error("Error occurred retrieving user details: user has no email address configured")
+		ctx.ReplyOK()
+
+		return
+	}
+
+	data := templates.EmailEventValues{
+		Title:       "Password changed successfully",
+		DisplayName: userInfo.DisplayName,
+		RemoteIP:    ctx.RemoteIP().String(),
+		Details: map[string]any{
+			"Action": "Password Reset",
+		},
+		BodyPrefix: eventEmailActionPasswordModifyPrefix,
+		BodyEvent:  eventEmailActionPasswordReset,
+		BodySuffix: eventEmailActionPasswordModifySuffix,
+	}
+
+	addresses := userInfo.Addresses()
+
+	ctx.GetLogger().Debugf("Sending an email to user %s (%s) to inform that the password has changed.",
+		username, addresses[0].String())
+
+	if err = ctx.Providers.Notifier.Send(ctx, addresses[0], "Password changed successfully", ctx.Providers.Templates.GetEventEmailTemplate(), data); err != nil {
+		ctx.GetLogger().Error(err)
+		ctx.ReplyOK()
+
+		return
+	}
+}
+
+func identityRetrieverFromStorage(ctx *middlewares.AutheliaCtx) (*session.Identity, error) {
+	var requestBody resetPasswordStep1RequestBody
+
+	err := json.Unmarshal(ctx.PostBody(), &requestBody)
+	if err != nil {
+		return nil, err
+	}
+
+	details, err := ctx.Providers.UserProvider.GetDetails(requestBody.Username)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(details.Emails) == 0 {
+		return nil, fmt.Errorf("user %s has no email address configured", requestBody.Username)
+	}
+
+	return &session.Identity{
+		Username:    requestBody.Username,
+		DisplayName: details.DisplayName,
+		Email:       details.Emails[0],
+	}, nil
+}
+
+// ResetPasswordIdentityStart is the handler for initiating the identity validation for resetting a password.
+// We need to ensure the attacker cannot perform user enumeration by always replying with 200 whatever what happens in backend.
+var ResetPasswordIdentityStart = middlewares.IdentityVerificationStart(middlewares.IdentityVerificationStartArgs{
+	MailTitle:               "Reset your password",
+	MailButtonContent:       "Reset",
+	MailButtonRevokeContent: "Revoke",
+	TargetEndpoint:          "/reset-password/step2",
+	RevokeEndpoint:          "/revoke/reset-password",
+	ActionClaim:             ActionResetPassword,
+	IdentityRetrieverFunc:   identityRetrieverFromStorage,
+}, middlewares.NewTimingAttackDelay(10, time.Millisecond*500))
+
+func resetPasswordIdentityVerificationFinish(ctx *middlewares.AutheliaCtx, username string) {
+	var (
+		userSession session.UserSession
+		err         error
+	)
+
+	ctx.ReplyOK()
+
+	if userSession, err = ctx.GetSession(); err != nil {
+		ctx.GetLogger().WithError(err).Errorf("Unable to get session to enable password reset in session for user '%s'", userSession.Username)
+
+		return
+	}
+
+	userSession.PasswordResetUsername = &username
+
+	if err = ctx.SaveSession(&userSession); err != nil {
+		ctx.GetLogger().WithError(err).Errorf("Unable to enable password reset in session for user '%s'", userSession.Username)
+	}
+}
+
+// ResetPasswordIdentityFinish the handler for finishing the identity validation.
+var ResetPasswordIdentityFinish = middlewares.IdentityVerificationFinish(
+	middlewares.IdentityVerificationFinishArgs{ActionClaim: ActionResetPassword}, resetPasswordIdentityVerificationFinish)

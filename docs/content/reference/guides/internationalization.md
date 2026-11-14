@@ -1,0 +1,25 @@
+---
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+title: "Internationalization"
+description: "A reference guide on internationalization in Authelia including supported locales for the web portal and how users can contribute translations via the platform."
+summary: "This section contains internationalization references for Authelia."
+date: 2024-03-14T06:00:14+11:00
+draft: false
+images: []
+weight: 220
+toc: true
+seo:
+  title: "" # custom title (optional)
+  description: "" # custom description (recommended)
+  canonical: "" # custom canonical URL (optional)
+  noindex: false # false (default) or true
+---
+
+## Web Portal Internationalization
+
+{{% table-i18n-locales %}}
+
+Information about overriding the web portal internationalization is available from the [Server Asset Overrides Reference Guide](./server-asset-overrides.md).

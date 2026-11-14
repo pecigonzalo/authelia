@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package authorization
 
 import (
@@ -12,7 +16,6 @@ type Authorizer struct {
 	defaultPolicy Level
 	rules         []*AccessControlRule
 	mfa           bool
-	config        *schema.Configuration
 	log           *logrus.Logger
 }
 
@@ -21,7 +24,6 @@ func NewAuthorizer(config *schema.Configuration) (authorizer *Authorizer) {
 	authorizer = &Authorizer{
 		defaultPolicy: NewLevel(config.AccessControl.DefaultPolicy),
 		rules:         NewAccessControlRules(config.AccessControl),
-		config:        config,
 		log:           logging.Logger(),
 	}
 
@@ -39,15 +41,7 @@ func NewAuthorizer(config *schema.Configuration) (authorizer *Authorizer) {
 		}
 	}
 
-	if authorizer.config.IdentityProviders.OIDC != nil {
-		for _, client := range authorizer.config.IdentityProviders.OIDC.Clients {
-			if client.Policy == twoFactor {
-				authorizer.mfa = true
-
-				return authorizer
-			}
-		}
-	}
+	authorizer.mfa = isOpenIDConnectMFA(config)
 
 	return authorizer
 }
@@ -64,12 +58,12 @@ func (p *Authorizer) GetRequiredLevel(subject Subject, object Object) (hasSubjec
 
 	for _, rule := range p.rules {
 		if rule.IsMatch(subject, object) {
-			p.log.Tracef(traceFmtACLHitMiss, "HIT", rule.Position, subject, object, object.Method)
+			p.log.Tracef(traceFmtACLHitMiss, "HIT", rule.Position, subject, object, object.Method, rule.Policy)
 
 			return rule.HasSubjects, rule.Policy
 		}
 
-		p.log.Tracef(traceFmtACLHitMiss, "MISS", rule.Position, subject, object, object.Method)
+		p.log.Tracef(traceFmtACLHitMiss, "MISS", rule.Position, subject, object, object.Method, rule.Policy)
 	}
 
 	p.log.Debugf("No matching rule for subject %s and url %s (method %s) applying default policy", subject, object, object.Method)

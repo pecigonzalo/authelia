@@ -1,6 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
+	"errors"
+	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -13,8 +20,8 @@ var kubernetesSuiteName = "Kubernetes"
 
 func init() {
 	dockerEnvironment := NewDockerEnvironment([]string{
-		"internal/suites/docker-compose.yml",
-		"internal/suites/example/compose/k3d/docker-compose.yml",
+		"internal/suites/compose.yml",
+		"internal/suites/example/compose/k3d/compose.yml",
 	})
 
 	k3d := K3D{}
@@ -85,6 +92,12 @@ func init() {
 			return err
 		}
 
+		log.Info("Waiting for the ingress to route the suite...")
+
+		if err := waitUntilIngressRoutes(); err != nil {
+			return err
+		}
+
 		return err
 	}
 
@@ -98,12 +111,51 @@ func init() {
 
 	GlobalRegistry.Register(kubernetesSuiteName, Suite{
 		SetUp:           setup,
-		SetUpTimeout:    12 * time.Minute,
+		SetUpTimeout:    3 * time.Minute,
+		OnSetupTimeout:  displayKubernetesState,
 		TestTimeout:     2 * time.Minute,
 		TearDown:        teardown,
-		TearDownTimeout: 2 * time.Minute,
+		TearDownTimeout: 1 * time.Minute,
 		Description:     "This suite has been created to test Authelia in a Kubernetes context and using Traefik as the ingress controller.",
 	})
+}
+
+func waitUntilIngressRoutes() error {
+	client, targets := NewHTTPClient(), []string{HomeBaseURL, LoginBaseURL + "/api/health"}
+
+	return utils.CheckUntil(time.Second, 30*time.Second, func() (bool, error) {
+		for _, target := range targets {
+			response, err := client.Get(target)
+			if err != nil {
+				return false, nil
+			}
+
+			_, _ = io.Copy(io.Discard, response.Body)
+			_ = response.Body.Close()
+
+			if response.StatusCode != http.StatusOK {
+				return false, nil
+			}
+		}
+
+		return true, nil
+	})
+}
+
+func displayKubernetesState() error {
+	var errs []error
+
+	for _, cmdline := range []string{
+		"kubectl get pods --all-namespaces -o wide",
+		"kubectl get events --all-namespaces --sort-by=.lastTimestamp",
+		"kubectl describe pods -n " + namespaceAuthelia,
+	} {
+		if err := k3dCommand(cmdline).Run(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 func loadDockerImages() error {
@@ -116,7 +168,6 @@ func loadDockerImages() error {
 
 	for _, image := range images {
 		err := k3d.LoadImage(image)
-
 		if err != nil {
 			return err
 		}

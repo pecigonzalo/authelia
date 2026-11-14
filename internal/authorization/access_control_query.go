@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package authorization
 
 import (
@@ -8,7 +12,7 @@ import (
 )
 
 // NewAccessControlQuery creates a new AccessControlQuery rule type.
-func NewAccessControlQuery(config [][]schema.ACLQueryRule) (rules []AccessControlQuery) {
+func NewAccessControlQuery(config [][]schema.AccessControlRuleQuery) (rules []AccessControlQuery) {
 	if len(config) == 0 {
 		return nil
 	}
@@ -47,8 +51,8 @@ func (acq AccessControlQuery) IsMatch(object Object) (isMatch bool) {
 	return true
 }
 
-// NewAccessControlQueryObjectMatcher creates a new ObjectMatcher rule type from a schema.ACLQueryRule.
-func NewAccessControlQueryObjectMatcher(rule schema.ACLQueryRule) (matcher ObjectMatcher, err error) {
+// NewAccessControlQueryObjectMatcher creates a new ObjectMatcher rule type from a schema.AccessControlRuleQuery.
+func NewAccessControlQueryObjectMatcher(rule schema.AccessControlRuleQuery) (matcher ObjectMatcher, err error) {
 	switch rule.Operator {
 	case operatorPresent, operatorAbsent:
 		return &AccessControlQueryMatcherPresent{key: rule.Key, present: rule.Operator == operatorPresent}, nil

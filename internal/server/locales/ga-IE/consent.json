@@ -1,0 +1,42 @@
+{
+	"Claim": "Éiligh {{name}}",
+	"Client ID": "ID Cliente: {{client_id}}",
+	"Consent Request": "Iarratas Comhoiriúnachta",
+	"Remember Consent": "Cuimhnigh Comhoiriúnacht",
+	"Scope": "Raon {{name}}",
+	"The above application is requesting the following permissions": "Tá an feidhmchlár thuas ag iarraidh na ceadanna seo a leanas",
+	"This saves this consent as a pre-configured consent for future use": "Sáileann sé an comhoiriúnacht seo mar chomhoiriúnacht roinnte le haghaidh úsáid amach anseo",
+	"claims": {
+		"address": "Seoladh Poist",
+		"birthdate": "Dáta Breithe",
+		"email": "Seoladh Ríomhphoist",
+		"email_verified": "Seoladh Ríomhphoist (Deimhnithe)",
+		"family_name": "Ainm Teaghlaigh",
+		"gender": "Gnéas",
+		"given_name": "Ainm Tugtha",
+		"groups": "Comhaltacht Grúpa",
+		"locale": "Teanga / Lán",
+		"middle_name": "Ainm Lár",
+		"name": "Ainm Taispeána",
+		"nickname": "Leasainm",
+		"phone_number": "Uimhir Telefóin",
+		"phone_number_verified": "Uimhir Telefóin (Deimhnithe)",
+		"picture": "URL Grianghraf",
+		"preferred_username": "Ainm Úsáideora Preferred",
+		"profile": "URL Próifíle",
+		"sub": "Aitheantas Uunique",
+		"updated_at": "Am Nuashonraithe Próifíle",
+		"website": "URL Suíomh Gréasáin",
+		"zoneinfo": "Cónaí"
+	},
+	"scopes": {
+		"address": "Rochtain ar do sheoladh",
+		"authelia.bearer.authz": "Rochtain ar acmhainní cosanta logáilte isteach mar tú",
+		"email": "Rochtain ar do sheoltaí ríomhphoist",
+		"groups": "Rochtain ar do shíntiúsanna grúpa",
+		"offline_access": "Nuashonraigh na ceadanna seo go huathoibríoch gan idirghníomhú ón úsáideoir",
+		"openid": "Úsáid OpenID chun do shíniú a fhíorú",
+		"phone": "Rochtain ar do uimhir gutháin",
+		"profile": "Rochtain ar do chuid eolais ghréasáin"
+	}
+}

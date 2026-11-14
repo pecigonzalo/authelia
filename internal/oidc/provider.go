@@ -1,11 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package oidc
 
 import (
-	"fmt"
+	"net/http"
 
-	"github.com/ory/fosite"
-	"github.com/ory/fosite/handler/openid"
-	"github.com/ory/herodot"
+	oauthelia2 "authelia.com/provider/oauth2"
 
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
 	"github.com/authelia/authelia/v4/internal/storage"
@@ -13,73 +15,32 @@ import (
 )
 
 // NewOpenIDConnectProvider new-ups a OpenIDConnectProvider.
-func NewOpenIDConnectProvider(config *schema.OpenIDConnectConfiguration, store storage.Provider, templates *templates.Provider) (provider *OpenIDConnectProvider, err error) {
-	if config == nil {
-		return nil, nil
+func NewOpenIDConnectProvider(config *schema.Configuration, store storage.Provider, templates *templates.Provider) (provider *OpenIDConnectProvider) {
+	if config == nil || config.IdentityProviders.OIDC == nil {
+		return nil
 	}
+
+	issuer := NewIssuer(config.IdentityProviders.OIDC.JSONWebKeys)
 
 	provider = &OpenIDConnectProvider{
-		JSONWriter: herodot.NewJSONWriter(nil),
-		Store:      NewStore(config, store),
-		Config:     NewConfig(config, templates),
+		Store:  NewStore(config, store),
+		Issuer: issuer,
+		Config: NewConfig(config.IdentityProviders.OIDC, issuer, templates),
 	}
 
-	provider.OAuth2Provider = fosite.NewOAuth2Provider(provider.Store, provider.Config)
+	provider.Provider = oauthelia2.New(provider.Store, provider.Config)
 
-	if provider.KeyManager, err = NewKeyManagerWithConfiguration(config); err != nil {
-		return nil, err
-	}
+	provider.LoadHandlers(provider.Store)
 
-	provider.Config.Strategy.OpenID = &openid.DefaultStrategy{
-		Signer: provider.KeyManager.Strategy(),
-		Config: provider.Config,
-	}
-
-	provider.Config.LoadHandlers(provider.Store, provider.KeyManager.Strategy())
-
-	provider.discovery = NewOpenIDConnectWellKnownConfiguration(config, provider.Store.clients)
-
-	return provider, nil
+	return provider
 }
 
-// GetOAuth2WellKnownConfiguration returns the discovery document for the OAuth Configuration.
-func (p *OpenIDConnectProvider) GetOAuth2WellKnownConfiguration(issuer string) OAuth2WellKnownConfiguration {
-	options := OAuth2WellKnownConfiguration{
-		CommonDiscoveryOptions: p.discovery.CommonDiscoveryOptions,
-		OAuth2DiscoveryOptions: p.discovery.OAuth2DiscoveryOptions,
+// WriteDynamicAuthorizeError writes the authorization error appropriate for the given requester.
+func (p *OpenIDConnectProvider) WriteDynamicAuthorizeError(ctx Context, rw http.ResponseWriter, requester oauthelia2.Requester, err error) {
+	switch r := requester.(type) {
+	case oauthelia2.DeviceAuthorizeRequester:
+		p.WriteRFC8628UserAuthorizeError(ctx, rw, r, err)
+	case oauthelia2.AuthorizeRequester:
+		p.WriteAuthorizeError(ctx, rw, r, err)
 	}
-
-	options.Issuer = issuer
-
-	options.JWKSURI = fmt.Sprintf("%s%s", issuer, EndpointPathJWKs)
-	options.AuthorizationEndpoint = fmt.Sprintf("%s%s", issuer, EndpointPathAuthorization)
-	options.PushedAuthorizationRequestEndpoint = fmt.Sprintf("%s%s", issuer, EndpointPathPushedAuthorizationRequest)
-	options.TokenEndpoint = fmt.Sprintf("%s%s", issuer, EndpointPathToken)
-	options.IntrospectionEndpoint = fmt.Sprintf("%s%s", issuer, EndpointPathIntrospection)
-	options.RevocationEndpoint = fmt.Sprintf("%s%s", issuer, EndpointPathRevocation)
-
-	return options
-}
-
-// GetOpenIDConnectWellKnownConfiguration returns the discovery document for the OpenID Configuration.
-func (p *OpenIDConnectProvider) GetOpenIDConnectWellKnownConfiguration(issuer string) OpenIDConnectWellKnownConfiguration {
-	options := OpenIDConnectWellKnownConfiguration{
-		CommonDiscoveryOptions:                          p.discovery.CommonDiscoveryOptions,
-		OAuth2DiscoveryOptions:                          p.discovery.OAuth2DiscoveryOptions,
-		OpenIDConnectDiscoveryOptions:                   p.discovery.OpenIDConnectDiscoveryOptions,
-		OpenIDConnectFrontChannelLogoutDiscoveryOptions: p.discovery.OpenIDConnectFrontChannelLogoutDiscoveryOptions,
-		OpenIDConnectBackChannelLogoutDiscoveryOptions:  p.discovery.OpenIDConnectBackChannelLogoutDiscoveryOptions,
-	}
-
-	options.Issuer = issuer
-
-	options.JWKSURI = fmt.Sprintf("%s%s", issuer, EndpointPathJWKs)
-	options.AuthorizationEndpoint = fmt.Sprintf("%s%s", issuer, EndpointPathAuthorization)
-	options.PushedAuthorizationRequestEndpoint = fmt.Sprintf("%s%s", issuer, EndpointPathPushedAuthorizationRequest)
-	options.TokenEndpoint = fmt.Sprintf("%s%s", issuer, EndpointPathToken)
-	options.UserinfoEndpoint = fmt.Sprintf("%s%s", issuer, EndpointPathUserinfo)
-	options.IntrospectionEndpoint = fmt.Sprintf("%s%s", issuer, EndpointPathIntrospection)
-	options.RevocationEndpoint = fmt.Sprintf("%s%s", issuer, EndpointPathRevocation)
-
-	return options
 }

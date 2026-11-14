@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -12,19 +16,18 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-type OneFactorSuite struct {
+type OneFactorScenario struct {
 	*RodSuite
 }
 
-func New1FAScenario() *OneFactorSuite {
-	return &OneFactorSuite{
+func New1FAScenario() *OneFactorScenario {
+	return &OneFactorScenario{
 		RodSuite: NewRodSuite(""),
 	}
 }
 
-func (s *OneFactorSuite) SetupSuite() {
-	browser, err := StartRod()
-
+func (s *OneFactorScenario) SetupSuite() {
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -32,26 +35,25 @@ func (s *OneFactorSuite) SetupSuite() {
 	s.RodSession = browser
 }
 
-func (s *OneFactorSuite) TearDownSuite() {
-	err := s.RodSession.Stop()
-
+func (s *OneFactorScenario) TearDownSuite() {
+	err := s.Stop()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func (s *OneFactorSuite) SetupTest() {
-	s.Page = s.doCreateTab(s.T(), HomeBaseURL)
-	s.verifyIsHome(s.T(), s.Page)
+func (s *OneFactorScenario) SetupTest() {
+	s.doSetupTest(HomeBaseURL)
 }
 
-func (s *OneFactorSuite) TearDownTest() {
+func (s *OneFactorScenario) TearDownTest() {
 	s.collectCoverage(s.Page)
 	s.MustClose()
 }
 
-func (s *OneFactorSuite) TestShouldNotAuthorizeSecretBeforeOneFactor() {
+func (s *OneFactorScenario) TestShouldNotAuthorizeSecretBeforeOneFactor() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -80,8 +82,9 @@ func (s *OneFactorSuite) TestShouldNotAuthorizeSecretBeforeOneFactor() {
 	s.verifyURLIsRegexp(s.T(), s.Context(ctx), rx)
 }
 
-func (s *OneFactorSuite) TestShouldAuthorizeSecretAfterOneFactor() {
+func (s *OneFactorScenario) TestShouldAuthorizeSecretAfterOneFactor() {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -92,8 +95,9 @@ func (s *OneFactorSuite) TestShouldAuthorizeSecretAfterOneFactor() {
 	s.verifySecretAuthorized(s.T(), s.Page)
 }
 
-func (s *OneFactorSuite) TestShouldRedirectToSecondFactor() {
+func (s *OneFactorScenario) TestShouldRedirectToSecondFactor() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -104,8 +108,9 @@ func (s *OneFactorSuite) TestShouldRedirectToSecondFactor() {
 	s.verifyIsSecondFactorPage(s.T(), s.Context(ctx))
 }
 
-func (s *OneFactorSuite) TestShouldDenyAccessOnBadPassword() {
+func (s *OneFactorScenario) TestShouldDenyAccessOnBadPassword() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -114,7 +119,21 @@ func (s *OneFactorSuite) TestShouldDenyAccessOnBadPassword() {
 	targetURL := fmt.Sprintf("%s/secret.html", AdminBaseURL)
 	s.doLoginOneFactor(s.T(), s.Context(ctx), "john", "bad-password", false, BaseDomain, targetURL)
 	s.verifyIsFirstFactorPage(s.T(), s.Context(ctx))
-	s.verifyNotificationDisplayed(s.T(), s.Context(ctx), "Incorrect username or password.")
+	s.verifyNotificationDisplayed(s.T(), s.Context(ctx), "Incorrect username or password")
+}
+
+func (s *OneFactorScenario) TestShouldDenyAccessOnForbidden() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
+	defer func() {
+		cancel()
+		s.collectScreenshot(ctx.Err(), s.Page)
+	}()
+
+	targetURL := fmt.Sprintf("%s/secret.html", DenyBaseURL)
+	s.doVisit(s.T(), s.Context(ctx), targetURL)
+
+	s.verifyIsDeny(s.T(), s.Context(ctx))
 }
 
 func TestRunOneFactor(t *testing.T) {

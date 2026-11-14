@@ -1,7 +1,10 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
-	"fmt"
 	"os"
 	"time"
 )
@@ -10,25 +13,27 @@ var pathPrefixSuiteName = "PathPrefix"
 
 func init() {
 	dockerEnvironment := NewDockerEnvironment([]string{
-		"internal/suites/docker-compose.yml",
-		"internal/suites/PathPrefix/docker-compose.yml",
-		"internal/suites/example/compose/authelia/docker-compose.backend.{}.yml",
-		"internal/suites/example/compose/authelia/docker-compose.frontend.{}.yml",
-		"internal/suites/example/compose/nginx/backend/docker-compose.yml",
-		"internal/suites/example/compose/traefik2/docker-compose.yml",
-		"internal/suites/example/compose/smtp/docker-compose.yml",
-		"internal/suites/example/compose/httpbin/docker-compose.yml",
+		"internal/suites/compose.yml",
+		"internal/suites/PathPrefix/compose.yml",
+		"internal/suites/example/compose/authelia/compose.backend.{}.yml",
+		"internal/suites/example/compose/authelia/compose.frontend.{}.yml",
+		"internal/suites/example/compose/nginx/backend/compose.yml",
+		"internal/suites/example/compose/traefik/compose.yml",
+		"internal/suites/example/compose/traefik/compose.v3.yml",
+		"internal/suites/example/compose/smtp/compose.yml",
+		"internal/suites/example/compose/httpbin/compose.yml",
 	})
 
 	if os.Getenv("CI") == t {
 		dockerEnvironment = NewDockerEnvironment([]string{
-			"internal/suites/docker-compose.yml",
-			"internal/suites/PathPrefix/docker-compose.yml",
-			"internal/suites/example/compose/authelia/docker-compose.backend.{}.yml",
-			"internal/suites/example/compose/nginx/backend/docker-compose.yml",
-			"internal/suites/example/compose/traefik2/docker-compose.yml",
-			"internal/suites/example/compose/smtp/docker-compose.yml",
-			"internal/suites/example/compose/httpbin/docker-compose.yml",
+			"internal/suites/compose.yml",
+			"internal/suites/PathPrefix/compose.yml",
+			"internal/suites/example/compose/authelia/compose.backend.{}.yml",
+			"internal/suites/example/compose/nginx/backend/compose.yml",
+			"internal/suites/example/compose/traefik/compose.yml",
+			"internal/suites/example/compose/traefik/compose.v3.yml",
+			"internal/suites/example/compose/smtp/compose.yml",
+			"internal/suites/example/compose/httpbin/compose.yml",
 		})
 	}
 
@@ -41,27 +46,15 @@ func init() {
 			return err
 		}
 
-		return updateDevEnvFileForDomain(BaseDomain, true)
-	}
-
-	displayAutheliaLogs := func() error {
-		backendLogs, err := dockerEnvironment.Logs("authelia-backend", nil)
-		if err != nil {
+		if err = waitUntilProxyRoutesPortal(BaseDomain); err != nil {
 			return err
 		}
 
-		fmt.Println(backendLogs)
+		return updateDevEnvFileForDomain(BaseDomain, dockerEnvironment)
+	}
 
-		if os.Getenv("CI") != t {
-			frontendLogs, err := dockerEnvironment.Logs("authelia-frontend", nil)
-			if err != nil {
-				return err
-			}
-
-			fmt.Println(frontendLogs)
-		}
-
-		return nil
+	displayAutheliaLogs := func() error {
+		return dockerEnvironment.PrintLogs("authelia-backend", "authelia-frontend")
 	}
 
 	teardown := func(suitePath string) error {
@@ -71,11 +64,12 @@ func init() {
 
 	GlobalRegistry.Register(pathPrefixSuiteName, Suite{
 		SetUp:           setup,
-		SetUpTimeout:    5 * time.Minute,
+		SetUpTimeout:    2 * time.Minute,
 		OnSetupTimeout:  displayAutheliaLogs,
 		OnError:         displayAutheliaLogs,
-		TestTimeout:     2 * time.Minute,
+		TestTimeout:     150 * time.Second,
 		TearDown:        teardown,
-		TearDownTimeout: 2 * time.Minute,
+		TearDownTimeout: 1 * time.Minute,
+		Description:     "This suite has been created to test Authelia served from a path prefix rather than the root of a domain.",
 	})
 }

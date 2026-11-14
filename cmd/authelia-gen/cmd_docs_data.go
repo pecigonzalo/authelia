@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -5,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -43,7 +48,7 @@ func docsDataMiscRunE(cmd *cobra.Command, args []string) (err error) {
 	data := DocsDataMisc{
 		CSP: TemplateCSP{
 			PlaceholderNONCE:    codeCSPNonce,
-			TemplateDefault:     buildCSP(codeCSPProductionDefaultSrc, codeCSPValuesCommon, codeCSPValuesProduction),
+			TemplateDefault:     buildCSP(codeCSPSelf, codeCSPValuesCommon, codeCSPValuesProduction),
 			TemplateDevelopment: buildCSP(codeCSPDevelopmentDefaultSrc, codeCSPValuesCommon, codeCSPValuesDevelopment),
 		},
 	}
@@ -51,41 +56,63 @@ func docsDataMiscRunE(cmd *cobra.Command, args []string) (err error) {
 	data.CSP.TemplateDefault = strings.ReplaceAll(data.CSP.TemplateDefault, "%s", codeCSPNonce)
 	data.CSP.TemplateDevelopment = strings.ReplaceAll(data.CSP.TemplateDevelopment, "%s", codeCSPNonce)
 
+	version, err := readVersion(cmd)
+	if err != nil {
+		return err
+	}
+
+	data.Latest = version.String()
+
 	var (
-		pathPackageJSON string
-		dataPackageJSON []byte
-		packageJSON     PackageJSON
+		root, tag string
 	)
 
-	if pathPackageJSON, err = getPFlagPath(cmd.Flags(), cmdFlagRoot, cmdFlagWeb, cmdFlagFileWebPackage); err != nil {
+	if root, err = getPFlagPath(cmd.Flags(), cmdFlagRoot); err != nil {
 		return err
 	}
 
-	if dataPackageJSON, err = os.ReadFile(pathPackageJSON); err != nil {
+	if tag, err = readComposeTag("traefik", root, "internal", "suites", "example", "compose", "traefik", "compose.v3.yml"); err != nil {
 		return err
 	}
 
-	if err = json.Unmarshal(dataPackageJSON, &packageJSON); err != nil {
-		return fmt.Errorf("failed to unmarshall package.json: %w", err)
+	data.Support.Traefik = append(data.Support.Traefik, tag)
+
+	if tag, err = readComposeTag("traefik", root, "internal", "suites", "example", "compose", "traefik", "compose.v2.yml"); err != nil {
+		return err
 	}
 
-	data.Latest = packageJSON.Version
+	data.Support.Traefik = append(data.Support.Traefik, tag)
+
+	data.HashingAlgorithms.PBKDF2.Variants = map[string]DocsDataMiscHashingAlgorithmsVariant{
+		schema.SHA512Lower: {DefaultIterations: strconv.Itoa(schema.PBKDF2VariantDefaultIterations(schema.SHA512Lower)), FIPS: "Approved"},
+		schema.SHA384Lower: {DefaultIterations: strconv.Itoa(schema.PBKDF2VariantDefaultIterations(schema.SHA384Lower)), FIPS: "Approved (Recommended)"},
+		schema.SHA256Lower: {DefaultIterations: strconv.Itoa(schema.PBKDF2VariantDefaultIterations(schema.SHA256Lower)), FIPS: "Approved"},
+		schema.SHA224Lower: {DefaultIterations: strconv.Itoa(schema.PBKDF2VariantDefaultIterations(schema.SHA224Lower)), FIPS: "Approved"},
+		schema.SHA1Lower:   {DefaultIterations: strconv.Itoa(schema.PBKDF2VariantDefaultIterations(schema.SHA1Lower)), FIPS: "Approved only for Legacy Systems"},
+	}
 
 	var (
 		outputPath string
-		dataJSON   []byte
 	)
 
 	if outputPath, err = getPFlagPath(cmd.Flags(), cmdFlagRoot, cmdFlagDocs, cmdFlagDocsData, cmdFlagDocsDataMisc); err != nil {
 		return err
 	}
 
-	if dataJSON, err = json.Marshal(data); err != nil {
-		return err
+	var (
+		f *os.File
+	)
+
+	if f, err = os.OpenFile(outputPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0600); err != nil {
+		return fmt.Errorf("failed to write file '%s': %w", outputPath, err)
 	}
 
-	if err = os.WriteFile(outputPath, dataJSON, 0600); err != nil {
-		return fmt.Errorf("failed to write file '%s': %w", outputPath, err)
+	encoder := json.NewEncoder(f)
+
+	encoder.SetIndent("", "  ")
+
+	if err = encoder.Encode(data); err != nil {
+		return fmt.Errorf("failed to encode json data: %w", err)
 	}
 
 	return nil
@@ -104,14 +131,17 @@ func newDocsDataKeysCmd() *cobra.Command {
 }
 
 func docsKeysRunE(cmd *cobra.Command, args []string) (err error) {
-	//nolint:prealloc
 	var (
 		data []ConfigurationKey
 	)
 
-	keys := readTags("", reflect.TypeOf(schema.Configuration{}), true)
+	keys := readTags("", reflect.TypeOf(schema.Configuration{}), true, true, true)
 
 	for _, key := range keys {
+		if strings.HasSuffix(key, ".*") {
+			continue
+		}
+
 		ck := ConfigurationKey{
 			Path:   key,
 			Secret: configuration.IsSecretKey(key),
@@ -128,7 +158,6 @@ func docsKeysRunE(cmd *cobra.Command, args []string) (err error) {
 	}
 
 	var (
-		dataJSON   []byte
 		outputPath string
 	)
 
@@ -136,12 +165,20 @@ func docsKeysRunE(cmd *cobra.Command, args []string) (err error) {
 		return err
 	}
 
-	if dataJSON, err = json.Marshal(data); err != nil {
-		return err
+	var (
+		f *os.File
+	)
+
+	if f, err = os.OpenFile(outputPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0600); err != nil {
+		return fmt.Errorf("failed to write file '%s': %w", outputPath, err)
 	}
 
-	if err = os.WriteFile(outputPath, dataJSON, 0600); err != nil {
-		return fmt.Errorf("failed to write file '%s': %w", outputPath, err)
+	encoder := json.NewEncoder(f)
+
+	encoder.SetIndent("", "  ")
+
+	if err = encoder.Encode(data); err != nil {
+		return fmt.Errorf("failed to encode json data: %w", err)
 	}
 
 	return nil

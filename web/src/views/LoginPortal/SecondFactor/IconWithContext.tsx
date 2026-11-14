@@ -1,8 +1,8 @@
-import React, { ReactNode } from "react";
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
 
-import { Theme } from "@mui/material";
-import makeStyles from "@mui/styles/makeStyles";
-import classnames from "classnames";
+import { ReactNode } from "react";
 
 interface IconWithContextProps {
     icon: ReactNode;
@@ -12,29 +12,12 @@ interface IconWithContextProps {
 }
 
 const IconWithContext = function (props: IconWithContextProps) {
-    const iconSize = 64;
-    const styles = makeStyles((theme: Theme) => ({
-        root: {},
-        iconContainer: {
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-        },
-        icon: {
-            width: iconSize,
-            height: iconSize,
-        },
-        context: {
-            display: "block",
-        },
-    }))();
-
     return (
-        <div className={classnames(props.className, styles.root)}>
-            <div className={styles.iconContainer}>
-                <div className={styles.icon}>{props.icon}</div>
+        <div className={props.className}>
+            <div className="flex flex-col items-center">
+                <div className="flex size-17.5 items-center justify-center">{props.icon}</div>
             </div>
-            <div className={styles.context}>{props.children}</div>
+            <div className="block">{props.children}</div>
         </div>
     );
 };

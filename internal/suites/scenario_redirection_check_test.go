@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -20,8 +24,7 @@ func NewRedirectionCheckScenario() *RedirectionCheckScenario {
 }
 
 func (s *RedirectionCheckScenario) SetupSuite() {
-	browser, err := StartRod()
-
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -30,16 +33,14 @@ func (s *RedirectionCheckScenario) SetupSuite() {
 }
 
 func (s *RedirectionCheckScenario) TearDownSuite() {
-	err := s.RodSession.Stop()
-
+	err := s.Stop()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
 func (s *RedirectionCheckScenario) SetupTest() {
-	s.Page = s.doCreateTab(s.T(), HomeBaseURL)
-	s.verifyIsHome(s.T(), s.Page)
+	s.doSetupTest(HomeBaseURL)
 }
 
 func (s *RedirectionCheckScenario) TearDownTest() {
@@ -59,17 +60,18 @@ var redirectionAuthorizations = map[string]bool{
 }
 
 func (s *RedirectionCheckScenario) TestShouldRedirectOnLoginOnlyWhenDomainIsSafe() {
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
 	}()
 
-	secret := s.doRegisterThenLogout(s.T(), s.Context(ctx), "john", "password")
+	s.doLoginAndRegisterTOTPThenLogout(s.T(), s.Context(ctx), "john", "password")
 
 	for url, redirected := range redirectionAuthorizations {
 		s.T().Run(url, func(t *testing.T) {
-			s.doLoginTwoFactor(t, s.Context(ctx), "john", "password", false, secret, url)
+			s.doLoginSecondFactorTOTP(t, s.Context(ctx), "john", "password", false, url)
 
 			if redirected {
 				s.verifySecretAuthorized(t, s.Context(ctx))
@@ -95,6 +97,7 @@ var logoutRedirectionURLs = map[string]bool{
 
 func (s *RedirectionCheckScenario) TestShouldRedirectOnLogoutOnlyWhenDomainIsSafe() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)

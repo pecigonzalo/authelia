@@ -1,8 +1,12 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package utils
 
 import (
 	"errors"
-	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -11,16 +15,20 @@ import (
 )
 
 func TestShouldExecCommandOnAutheliaRootPath(t *testing.T) {
+	suffix := "authelia"
+
+	if pipeline := os.Getenv("BUILDKITE_PIPELINE_SLUG"); pipeline != "" {
+		suffix = pipeline
+	}
+
 	cmd := Command("pwd")
 	result, err := cmd.CombinedOutput()
 	assert.NoError(t, err, "")
 
 	str := strings.Trim(string(result), "\n")
 
-	fmt.Println(string(result))
-
 	assert.NoError(t, err, "")
-	assert.Equal(t, true, strings.HasSuffix(str, "authelia"))
+	assert.Equal(t, true, strings.HasSuffix(str, suffix))
 }
 
 func TestCommandShouldOutputResult(t *testing.T) {
@@ -53,12 +61,13 @@ func TestShouldRunFuncUntilNoError(t *testing.T) {
 		if counter < 3 {
 			return errors.New("not ready")
 		}
+
 		return nil
 	})
 	assert.NoError(t, err, "")
 }
 
-func TestShouldFailAfterMaxAttemps(t *testing.T) {
+func TestShouldFailAfterMaxAttempts(t *testing.T) {
 	counter := 0
 
 	err := RunFuncWithRetry(3, 500*time.Millisecond, func() error {
@@ -66,6 +75,7 @@ func TestShouldFailAfterMaxAttemps(t *testing.T) {
 		if counter < 4 {
 			return errors.New("not ready")
 		}
+
 		return nil
 	})
 	assert.ErrorContains(t, err, "not ready")

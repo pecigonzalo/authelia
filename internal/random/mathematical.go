@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package random
 
 import (
@@ -24,7 +28,7 @@ type Mathematical struct {
 	lock *sync.Mutex
 }
 
-// Read implements the io.Reader interface.
+// Read implements the [io.Reader] interface.
 func (r *Mathematical) Read(p []byte) (n int, err error) {
 	r.lock.Lock()
 
@@ -61,19 +65,17 @@ func (r *Mathematical) BytesCustomErr(n int, charset []byte) (data []byte, err e
 		n = DefaultN
 	}
 
-	data = make([]byte, n)
+	if len(charset) == 0 {
+		data = make([]byte, n)
 
-	if _, err = r.Read(data); err != nil {
-		return nil, err
+		if _, err = r.Read(data); err != nil {
+			return nil, err
+		}
+
+		return data, nil
 	}
 
-	t := len(charset)
-
-	for i := 0; i < n; i++ {
-		data[i] = charset[data[i]%byte(t)]
-	}
-
-	return data, nil
+	return bytesCharsetErr(r, n, charset)
 }
 
 // StringCustomErr is an overload of BytesCustomWithErr which takes a characters string and returns a string.
@@ -112,13 +114,16 @@ func (r *Mathematical) Intn(n int) int {
 
 // IntnErr returns a random int error combination with a maximum of n.
 func (r *Mathematical) IntnErr(n int) (output int, err error) {
+	if n <= 0 {
+		return 0, fmt.Errorf("n must be more than 0")
+	}
+
 	return r.Intn(n), nil
 }
 
-// Int returns a random *big.Int with a maximum of max.
+// Int returns a random *[big.Int] with a maximum of max.
 func (r *Mathematical) Int(max *big.Int) (value *big.Int) {
 	var err error
-
 	if value, err = r.IntErr(max); err != nil {
 		return big.NewInt(-1)
 	}
@@ -126,21 +131,17 @@ func (r *Mathematical) Int(max *big.Int) (value *big.Int) {
 	return value
 }
 
-// IntErr returns a random *big.Int error combination with a maximum of max.
+// IntErr returns a random *[big.Int] error combination with a maximum of max.
 func (r *Mathematical) IntErr(max *big.Int) (value *big.Int, err error) {
 	if max == nil {
 		return nil, fmt.Errorf("max is required")
 	}
 
-	if max.Sign() <= 0 {
+	if max.Int64() <= 0 {
 		return nil, fmt.Errorf("max must be 1 or more")
 	}
 
-	r.lock.Lock()
-
-	defer r.lock.Unlock()
-
-	return big.NewInt(int64(r.Intn(max.Sign()))), nil
+	return big.NewInt(int64(r.Intn(int(max.Int64())))), nil
 }
 
 // Prime returns a number of the given bit length that is prime with high probability. Prime will return error for any

@@ -1,0 +1,42 @@
+{
+	"Claim": "Ihingi {{name}}",
+	"Client ID": "Client ID: {{client_id}}",
+	"Consent Request": "Pahintulot na Kahilingan",
+	"Remember Consent": "Tandaan ang Pahintulot",
+	"Scope": "Saklaw {{name}}",
+	"The above application is requesting the following permissions": "Ang itaas na aplikasyon ay humihiling ng mga sumusunod na pahintulot",
+	"This saves this consent as a pre-configured consent for future use": "Naka-save ito bilang isang naunang-configure na pahintulot para sa hinaharap na paggamit",
+	"claims": {
+		"address": "Tirahan ng Postal",
+		"birthdate": "Petsa ng Kapanganakan",
+		"email": "Email Address",
+		"email_verified": "E-mail Address (Naka-verify)",
+		"family_name": "Apelyido",
+		"gender": "Kasarian",
+		"given_name": "Ibinigay na Pangalan",
+		"groups": "Kasapi ng Grupo",
+		"locale": "Wika / Wika",
+		"middle_name": "Gitnang Pangalan",
+		"name": "Pangalan sa Display",
+		"nickname": "Palayaw",
+		"phone_number": "Numero ng Telepono",
+		"phone_number_verified": "Numero ng Telepono (Naka-verify)",
+		"picture": "URL ng Larawan",
+		"preferred_username": "Nais na Username",
+		"profile": "URL ng Profile",
+		"sub": "Natatanging Tagatukoy",
+		"updated_at": "Oras ng Pag-update ng Profile",
+		"website": "URL ng Website",
+		"zoneinfo": "Pook ng Oras"
+	},
+	"scopes": {
+		"address": "Kunin ang iyong address",
+		"authelia.bearer.authz": "Kunin ang mga protektadong mapagkukunan na naka-log in bilang ikaw",
+		"email": "Kunin ang iyong mga email address",
+		"groups": "Kunin ang iyong mga kasapi sa grupo",
+		"offline_access": "Awtomatikong i-refresh ang mga pahintulot na ito nang walang pakikialam ng gumagamit",
+		"openid": "Gumamit ng OpenID upang beripikahin ang iyong pagkatao",
+		"phone": "Kunin ang iyong numero ng telepono",
+		"profile": "Kunin ang impormasyon ng iyong profile"
+	}
+}

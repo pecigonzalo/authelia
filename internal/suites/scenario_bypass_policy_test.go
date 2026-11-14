@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -21,8 +25,7 @@ func NewBypassPolicyScenario() *BypassPolicyScenario {
 }
 
 func (s *BypassPolicyScenario) SetupSuite() {
-	browser, err := StartRod()
-
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -31,16 +34,14 @@ func (s *BypassPolicyScenario) SetupSuite() {
 }
 
 func (s *BypassPolicyScenario) TearDownSuite() {
-	err := s.RodSession.Stop()
-
+	err := s.Stop()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
 func (s *BypassPolicyScenario) SetupTest() {
-	s.Page = s.doCreateTab(s.T(), HomeBaseURL)
-	s.verifyIsHome(s.T(), s.Page)
+	s.doSetupTest(HomeBaseURL)
 }
 
 func (s *BypassPolicyScenario) TearDownTest() {
@@ -50,6 +51,7 @@ func (s *BypassPolicyScenario) TearDownTest() {
 
 func (s *BypassPolicyScenario) TestShouldAccessPublicResource() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)

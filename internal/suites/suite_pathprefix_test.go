@@ -1,7 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 )
@@ -24,8 +30,8 @@ func (s *PathPrefixSuite) Test1FAScenario() {
 	suite.Run(s.T(), New1FAScenario())
 }
 
-func (s *PathPrefixSuite) Test2FAScenario() {
-	suite.Run(s.T(), New2FAScenario())
+func (s *PathPrefixSuite) Test2FATOTPScenario() {
+	suite.Run(s.T(), New2FATOTPScenario())
 }
 
 func (s *PathPrefixSuite) TestCustomHeaders() {
@@ -34,6 +40,54 @@ func (s *PathPrefixSuite) TestCustomHeaders() {
 
 func (s *PathPrefixSuite) TestResetPasswordScenario() {
 	suite.Run(s.T(), NewResetPasswordScenario())
+}
+
+func (s *PathPrefixSuite) TestChangePasswordScenario() {
+	suite.Run(s.T(), NewChangePasswordScenario())
+}
+
+func (s *PathPrefixSuite) TestShouldRenderFrontendWithTrailingSlash() {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer func() {
+		cancel()
+		s.collectCoverage(s.Page)
+		s.collectScreenshot(ctx.Err(), s.Page)
+		s.MustClose()
+		err := s.Stop()
+		s.Require().NoError(err)
+	}()
+
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
+	s.Require().NoError(err)
+	s.RodSession = browser
+
+	s.doSetupTest(HomeBaseURL)
+
+	s.doVisit(s.T(), s.Context(ctx), GetLoginBaseURL(BaseDomain)+"/")
+	s.verifyIsFirstFactorPage(s.T(), s.Context(ctx))
+}
+
+func (s *PathPrefixSuite) TestShouldRenderFrontendWithoutTrailingSlash() {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer func() {
+		cancel()
+		s.collectCoverage(s.Page)
+		s.collectScreenshot(ctx.Err(), s.Page)
+		s.MustClose()
+		err := s.Stop()
+		s.Require().NoError(err)
+	}()
+
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
+	s.Require().NoError(err)
+	s.RodSession = browser
+
+	s.doSetupTest(HomeBaseURL)
+
+	s.doVisit(s.T(), s.Context(ctx), GetLoginBaseURL(BaseDomain))
+	s.verifyIsFirstFactorPage(s.T(), s.Context(ctx))
 }
 
 func (s *PathPrefixSuite) SetupSuite() {

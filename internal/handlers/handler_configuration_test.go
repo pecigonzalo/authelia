@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package handlers
 
 import (
@@ -10,38 +14,38 @@ import (
 	"github.com/authelia/authelia/v4/internal/mocks"
 )
 
-type SecondFactorAvailableMethodsFixture struct {
+type ConfigurationHandlerFixture struct {
 	suite.Suite
 	mock *mocks.MockAutheliaCtx
 }
 
-func (s *SecondFactorAvailableMethodsFixture) SetupTest() {
+func (s *ConfigurationHandlerFixture) SetupTest() {
 	s.mock = mocks.NewMockAutheliaCtx(s.T())
 	s.mock.Ctx.Providers.Authorizer = authorization.NewAuthorizer(&schema.Configuration{
-		AccessControl: schema.AccessControlConfiguration{
+		AccessControl: schema.AccessControl{
 			DefaultPolicy: "deny",
-			Rules:         []schema.ACLRule{},
+			Rules:         []schema.AccessControlRule{},
 		}})
 }
 
-func (s *SecondFactorAvailableMethodsFixture) TearDownTest() {
+func (s *ConfigurationHandlerFixture) TearDownTest() {
 	s.mock.Close()
 }
 
-func (s *SecondFactorAvailableMethodsFixture) TestShouldHaveAllConfiguredMethods() {
+func (s *ConfigurationHandlerFixture) TestShouldHaveAllConfiguredMethods() {
 	s.mock.Ctx.Configuration = schema.Configuration{
-		DuoAPI: schema.DuoAPIConfiguration{
+		DuoAPI: schema.DuoAPI{
 			Disable: false,
 		},
-		TOTP: schema.TOTPConfiguration{
+		TOTP: schema.TOTP{
 			Disable: false,
 		},
-		Webauthn: schema.WebauthnConfiguration{
+		WebAuthn: schema.WebAuthn{
 			Disable: false,
 		},
-		AccessControl: schema.AccessControlConfiguration{
+		AccessControl: schema.AccessControl{
 			DefaultPolicy: "deny",
-			Rules: []schema.ACLRule{
+			Rules: []schema.AccessControlRule{
 				{
 					Domains: []string{"example.com"},
 					Policy:  "two_factor",
@@ -58,20 +62,20 @@ func (s *SecondFactorAvailableMethodsFixture) TestShouldHaveAllConfiguredMethods
 	})
 }
 
-func (s *SecondFactorAvailableMethodsFixture) TestShouldRemoveTOTPFromAvailableMethodsWhenDisabled() {
+func (s *ConfigurationHandlerFixture) TestShouldRemoveTOTPFromAvailableMethodsWhenDisabled() {
 	s.mock.Ctx.Configuration = schema.Configuration{
-		DuoAPI: schema.DuoAPIConfiguration{
+		DuoAPI: schema.DuoAPI{
 			Disable: false,
 		},
-		TOTP: schema.TOTPConfiguration{
+		TOTP: schema.TOTP{
 			Disable: true,
 		},
-		Webauthn: schema.WebauthnConfiguration{
+		WebAuthn: schema.WebAuthn{
 			Disable: false,
 		},
-		AccessControl: schema.AccessControlConfiguration{
+		AccessControl: schema.AccessControl{
 			DefaultPolicy: "deny",
-			Rules: []schema.ACLRule{
+			Rules: []schema.AccessControlRule{
 				{
 					Domains: []string{"example.com"},
 					Policy:  "two_factor",
@@ -88,20 +92,20 @@ func (s *SecondFactorAvailableMethodsFixture) TestShouldRemoveTOTPFromAvailableM
 	})
 }
 
-func (s *SecondFactorAvailableMethodsFixture) TestShouldRemoveWebauthnFromAvailableMethodsWhenDisabled() {
+func (s *ConfigurationHandlerFixture) TestShouldRemoveWebAuthnFromAvailableMethodsWhenDisabled() {
 	s.mock.Ctx.Configuration = schema.Configuration{
-		DuoAPI: schema.DuoAPIConfiguration{
+		DuoAPI: schema.DuoAPI{
 			Disable: false,
 		},
-		TOTP: schema.TOTPConfiguration{
+		TOTP: schema.TOTP{
 			Disable: false,
 		},
-		Webauthn: schema.WebauthnConfiguration{
+		WebAuthn: schema.WebAuthn{
 			Disable: true,
 		},
-		AccessControl: schema.AccessControlConfiguration{
+		AccessControl: schema.AccessControl{
 			DefaultPolicy: "deny",
-			Rules: []schema.ACLRule{
+			Rules: []schema.AccessControlRule{
 				{
 					Domains: []string{"example.com"},
 					Policy:  "two_factor",
@@ -118,20 +122,20 @@ func (s *SecondFactorAvailableMethodsFixture) TestShouldRemoveWebauthnFromAvaila
 	})
 }
 
-func (s *SecondFactorAvailableMethodsFixture) TestShouldRemoveDuoFromAvailableMethodsWhenNotConfigured() {
+func (s *ConfigurationHandlerFixture) TestShouldRemoveDuoFromAvailableMethodsWhenNotConfigured() {
 	s.mock.Ctx.Configuration = schema.Configuration{
-		DuoAPI: schema.DuoAPIConfiguration{
+		DuoAPI: schema.DuoAPI{
 			Disable: true,
 		},
-		TOTP: schema.TOTPConfiguration{
+		TOTP: schema.TOTP{
 			Disable: false,
 		},
-		Webauthn: schema.WebauthnConfiguration{
+		WebAuthn: schema.WebAuthn{
 			Disable: false,
 		},
-		AccessControl: schema.AccessControlConfiguration{
+		AccessControl: schema.AccessControl{
 			DefaultPolicy: "deny",
-			Rules: []schema.ACLRule{
+			Rules: []schema.AccessControlRule{
 				{
 					Domains: []string{"example.com"},
 					Policy:  "two_factor",
@@ -148,20 +152,20 @@ func (s *SecondFactorAvailableMethodsFixture) TestShouldRemoveDuoFromAvailableMe
 	})
 }
 
-func (s *SecondFactorAvailableMethodsFixture) TestShouldRemoveAllMethodsWhenNoTwoFactorACLRulesConfigured() {
+func (s *ConfigurationHandlerFixture) TestShouldRemoveAllMethodsWhenNoTwoFactorACLRulesConfigured() {
 	s.mock.Ctx.Configuration = schema.Configuration{
-		DuoAPI: schema.DuoAPIConfiguration{
+		DuoAPI: schema.DuoAPI{
 			Disable: false,
 		},
-		TOTP: schema.TOTPConfiguration{
+		TOTP: schema.TOTP{
 			Disable: false,
 		},
-		Webauthn: schema.WebauthnConfiguration{
+		WebAuthn: schema.WebAuthn{
 			Disable: false,
 		},
-		AccessControl: schema.AccessControlConfiguration{
+		AccessControl: schema.AccessControl{
 			DefaultPolicy: "deny",
-			Rules: []schema.ACLRule{
+			Rules: []schema.AccessControlRule{
 				{
 					Domains: []string{"example.com"},
 					Policy:  "one_factor",
@@ -178,20 +182,20 @@ func (s *SecondFactorAvailableMethodsFixture) TestShouldRemoveAllMethodsWhenNoTw
 	})
 }
 
-func (s *SecondFactorAvailableMethodsFixture) TestShouldRemoveAllMethodsWhenAllDisabledOrNotConfigured() {
+func (s *ConfigurationHandlerFixture) TestShouldRemoveAllMethodsWhenAllDisabledOrNotConfigured() {
 	s.mock.Ctx.Configuration = schema.Configuration{
-		DuoAPI: schema.DuoAPIConfiguration{
+		DuoAPI: schema.DuoAPI{
 			Disable: true,
 		},
-		TOTP: schema.TOTPConfiguration{
+		TOTP: schema.TOTP{
 			Disable: true,
 		},
-		Webauthn: schema.WebauthnConfiguration{
+		WebAuthn: schema.WebAuthn{
 			Disable: true,
 		},
-		AccessControl: schema.AccessControlConfiguration{
+		AccessControl: schema.AccessControl{
 			DefaultPolicy: "deny",
-			Rules: []schema.ACLRule{
+			Rules: []schema.AccessControlRule{
 				{
 					Domains: []string{"example.com"},
 					Policy:  "two_factor",
@@ -208,7 +212,180 @@ func (s *SecondFactorAvailableMethodsFixture) TestShouldRemoveAllMethodsWhenAllD
 	})
 }
 
+func (s *ConfigurationHandlerFixture) TestDisablePasswordResetChangeOptions() {
+	testCases := []struct {
+		name                  string
+		passwordChangeDisable bool
+		passwordResetDisable  bool
+	}{
+		{
+			name:                  "BothEnabled",
+			passwordChangeDisable: false,
+			passwordResetDisable:  false,
+		},
+		{
+			name:                  "PasswordChangeDisabled",
+			passwordChangeDisable: true,
+			passwordResetDisable:  false,
+		},
+		{
+			name:                  "PasswordResetDisabled",
+			passwordChangeDisable: false,
+			passwordResetDisable:  true,
+		},
+		{
+			name:                  "BothDisabled",
+			passwordChangeDisable: true,
+			passwordResetDisable:  true,
+		},
+	}
+
+	for _, tc := range testCases {
+		s.T().Run(tc.name, func(t *testing.T) {
+			mock := mocks.NewMockAutheliaCtx(t)
+			defer mock.Close()
+
+			mock.Ctx.Configuration = schema.Configuration{
+				AuthenticationBackend: schema.AuthenticationBackend{
+					PasswordChange: schema.AuthenticationBackendPasswordChange{
+						Disable: tc.passwordChangeDisable,
+					},
+					PasswordReset: schema.AuthenticationBackendPasswordReset{
+						Disable: tc.passwordResetDisable,
+					},
+				},
+				DuoAPI: schema.DuoAPI{
+					Disable: true,
+				},
+				TOTP: schema.TOTP{
+					Disable: true,
+				},
+				WebAuthn: schema.WebAuthn{
+					Disable: true,
+				},
+			}
+
+			ConfigurationGET(mock.Ctx)
+
+			mock.Assert200OK(s.T(), configurationBody{
+				AvailableMethods:       []string{},
+				PasswordChangeDisabled: tc.passwordChangeDisable,
+				PasswordResetDisabled:  tc.passwordResetDisable,
+			})
+		})
+	}
+}
+
+func (s *ConfigurationHandlerFixture) TestShouldReportRecoveryCodesDisabled() {
+	s.mock.Ctx.Configuration = schema.Configuration{
+		DuoAPI: schema.DuoAPI{
+			Disable: true,
+		},
+		TOTP: schema.TOTP{
+			Disable: true,
+		},
+		WebAuthn: schema.WebAuthn{
+			Disable: true,
+		},
+		RecoveryCodes: schema.RecoveryCodes{
+			Disable: true,
+		},
+	}
+
+	ConfigurationGET(s.mock.Ctx)
+
+	s.mock.Assert200OK(s.T(), configurationBody{
+		AvailableMethods:      []string{},
+		RecoveryCodesDisabled: true,
+	})
+}
+
 func TestRunSuite(t *testing.T) {
-	s := new(SecondFactorAvailableMethodsFixture)
+	s := new(ConfigurationHandlerFixture)
 	suite.Run(t, s)
+}
+
+func (s *ConfigurationHandlerFixture) TestShouldHaveNoMethodsWhenNothingUsesASecondFactor() {
+	s.mock.Ctx.Configuration = schema.Configuration{
+		TOTP:     schema.TOTP{Disable: false},
+		WebAuthn: schema.WebAuthn{Disable: false},
+		DuoAPI:   schema.DuoAPI{Disable: false},
+		AccessControl: schema.AccessControl{
+			DefaultPolicy: "one_factor",
+			Rules:         []schema.AccessControlRule{},
+		}}
+
+	s.mock.Ctx.Providers.Authorizer = authorization.NewAuthorizer(&s.mock.Ctx.Configuration)
+
+	ConfigurationGET(s.mock.Ctx)
+
+	s.mock.Assert200OK(s.T(), configurationBody{
+		AvailableMethods: []string{},
+	})
+}
+
+func (s *ConfigurationHandlerFixture) TestShouldHaveMethodsWhenElevationRequiresASecondFactor() {
+	s.mock.Ctx.Configuration = schema.Configuration{
+		TOTP:     schema.TOTP{Disable: false},
+		WebAuthn: schema.WebAuthn{Disable: false},
+		DuoAPI:   schema.DuoAPI{Disable: false},
+		IdentityValidation: schema.IdentityValidation{
+			ElevatedSession: schema.IdentityValidationElevatedSession{RequireSecondFactor: true},
+		},
+		AccessControl: schema.AccessControl{
+			DefaultPolicy: "one_factor",
+			Rules:         []schema.AccessControlRule{},
+		}}
+
+	s.mock.Ctx.Providers.Authorizer = authorization.NewAuthorizer(&s.mock.Ctx.Configuration)
+
+	ConfigurationGET(s.mock.Ctx)
+
+	s.mock.Assert200OK(s.T(), configurationBody{
+		AvailableMethods: []string{"totp", "webauthn", "mobile_push"},
+	})
+}
+
+func (s *ConfigurationHandlerFixture) TestShouldHaveMethodsWhenElevationSkipsOnASecondFactor() {
+	s.mock.Ctx.Configuration = schema.Configuration{
+		TOTP:     schema.TOTP{Disable: false},
+		WebAuthn: schema.WebAuthn{Disable: false},
+		DuoAPI:   schema.DuoAPI{Disable: false},
+		IdentityValidation: schema.IdentityValidation{
+			ElevatedSession: schema.IdentityValidationElevatedSession{SkipSecondFactor: true},
+		},
+		AccessControl: schema.AccessControl{
+			DefaultPolicy: "one_factor",
+			Rules:         []schema.AccessControlRule{},
+		}}
+
+	s.mock.Ctx.Providers.Authorizer = authorization.NewAuthorizer(&s.mock.Ctx.Configuration)
+
+	ConfigurationGET(s.mock.Ctx)
+
+	s.mock.Assert200OK(s.T(), configurationBody{
+		AvailableMethods: []string{"totp", "webauthn", "mobile_push"},
+	})
+}
+
+func (s *ConfigurationHandlerFixture) TestShouldRespectDisabledMethodsWhenOnlyElevationUsesThem() {
+	s.mock.Ctx.Configuration = schema.Configuration{
+		TOTP:     schema.TOTP{Disable: true},
+		WebAuthn: schema.WebAuthn{Disable: false},
+		DuoAPI:   schema.DuoAPI{Disable: true},
+		IdentityValidation: schema.IdentityValidation{
+			ElevatedSession: schema.IdentityValidationElevatedSession{RequireSecondFactor: true},
+		},
+		AccessControl: schema.AccessControl{
+			DefaultPolicy: "one_factor",
+			Rules:         []schema.AccessControlRule{},
+		}}
+
+	s.mock.Ctx.Providers.Authorizer = authorization.NewAuthorizer(&s.mock.Ctx.Configuration)
+
+	ConfigurationGET(s.mock.Ctx)
+
+	s.mock.Assert200OK(s.T(), configurationBody{
+		AvailableMethods: []string{"webauthn"},
+	})
 }

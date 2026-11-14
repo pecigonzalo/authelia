@@ -1,36 +1,43 @@
-import React, { ReactNode } from "react";
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
 
-import { Button, Dialog, DialogActions, DialogContent, Grid, Theme, Typography, useTheme } from "@mui/material";
-import makeStyles from "@mui/styles/makeStyles";
+import { ReactNode } from "react";
+
 import { useTranslation } from "react-i18next";
 
 import FingerTouchIcon from "@components/FingerTouchIcon";
 import PushNotificationIcon from "@components/PushNotificationIcon";
 import TimerIcon from "@components/TimerIcon";
+import { Button } from "@components/UI/Button";
+import { Dialog, DialogContent, DialogFooter, DialogTitle } from "@components/UI/Dialog";
 import { SecondFactorMethod } from "@models/Methods";
 
 export interface Props {
     open: boolean;
     methods: Set<SecondFactorMethod>;
-    webauthnSupported: boolean;
+    webauthn: boolean;
 
     onClose: () => void;
-    onClick: (method: SecondFactorMethod) => void;
+    onClick: (_method: SecondFactorMethod) => void;
 }
 
 const MethodSelectionDialog = function (props: Props) {
-    const styles = useStyles();
-    const theme = useTheme();
     const { t: translate } = useTranslation();
-
     const pieChartIcon = (
-        <TimerIcon width={24} height={24} period={15} color={theme.palette.primary.main} backgroundColor={"white"} />
+        <TimerIcon width={32} height={32} period={15} color="var(--primary)" backgroundColor={"white"} />
     );
 
     return (
-        <Dialog open={props.open} className={styles.root} onClose={props.onClose}>
-            <DialogContent>
-                <Grid container justifyContent="center" spacing={1} id="methods-dialog">
+        <Dialog
+            open={props.open}
+            onOpenChange={(open) => {
+                if (!open) props.onClose();
+            }}
+        >
+            <DialogContent className="sm:max-w-xl text-center" showCloseButton={false}>
+                <DialogTitle className="sr-only">{translate("Methods")}</DialogTitle>
+                <div className="grid grid-cols-1 justify-center gap-3" id="methods-dialog">
                     {props.methods.has(SecondFactorMethod.TOTP) ? (
                         <MethodItem
                             id="one-time-password-option"
@@ -39,12 +46,12 @@ const MethodSelectionDialog = function (props: Props) {
                             onClick={() => props.onClick(SecondFactorMethod.TOTP)}
                         />
                     ) : null}
-                    {props.methods.has(SecondFactorMethod.Webauthn) && props.webauthnSupported ? (
+                    {props.methods.has(SecondFactorMethod.WebAuthn) && props.webauthn ? (
                         <MethodItem
                             id="webauthn-option"
-                            method={translate("Security Key - WebAuthN")}
+                            method={translate("Security Key - WebAuthn")}
                             icon={<FingerTouchIcon size={32} />}
-                            onClick={() => props.onClick(SecondFactorMethod.Webauthn)}
+                            onClick={() => props.onClick(SecondFactorMethod.WebAuthn)}
                         />
                     ) : null}
                     {props.methods.has(SecondFactorMethod.MobilePush) ? (
@@ -55,63 +62,36 @@ const MethodSelectionDialog = function (props: Props) {
                             onClick={() => props.onClick(SecondFactorMethod.MobilePush)}
                         />
                     ) : null}
-                </Grid>
+                </div>
+                <DialogFooter>
+                    <Button variant="default" onClick={props.onClose}>
+                        {translate("Close")}
+                    </Button>
+                </DialogFooter>
             </DialogContent>
-            <DialogActions>
-                <Button color="primary" onClick={props.onClose}>
-                    Close
-                </Button>
-            </DialogActions>
         </Dialog>
     );
 };
 
-export default MethodSelectionDialog;
-
-const useStyles = makeStyles((theme: Theme) => ({
-    root: {
-        textAlign: "center",
-    },
-}));
-
 interface MethodItemProps {
-    id: string;
-    method: string;
-    icon: ReactNode;
+    readonly id: string;
+    readonly method: string;
+    readonly icon: ReactNode;
 
-    onClick: () => void;
+    readonly onClick: () => void;
 }
 
 function MethodItem(props: MethodItemProps) {
-    const style = makeStyles((theme: Theme) => ({
-        item: {
-            paddingTop: theme.spacing(4),
-            paddingBottom: theme.spacing(4),
-            width: "100%",
-        },
-        icon: {
-            display: "inline-block",
-            fill: "white",
-        },
-        buttonRoot: {
-            display: "block",
-        },
-    }))();
-
     return (
-        <Grid item xs={12} className="method-option" id={props.id}>
-            <Button
-                className={style.item}
-                color="primary"
-                classes={{ root: style.buttonRoot }}
-                variant="contained"
-                onClick={props.onClick}
-            >
-                <div className={style.icon}>{props.icon}</div>
+        <div className="method-option w-full" id={props.id}>
+            <Button className="block h-auto w-full py-8 [&_svg]:!size-auto" variant="default" onClick={props.onClick}>
+                <div className="mb-2 flex justify-center fill-white">{props.icon}</div>
                 <div>
-                    <Typography>{props.method}</Typography>
+                    <p className="text-sm">{props.method}</p>
                 </div>
             </Button>
-        </Grid>
+        </div>
     );
 }
+
+export default MethodSelectionDialog;

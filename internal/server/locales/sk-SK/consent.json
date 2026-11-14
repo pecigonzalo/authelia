@@ -1,0 +1,42 @@
+{
+	"Claim": "Nárok {{name}}",
+	"Client ID": "ID klienta: {{client_id}}",
+	"Consent Request": "Žiadosť o súhlas",
+	"Remember Consent": "Zapamätať súhlas",
+	"Scope": "Rozsah {{name}}",
+	"The above application is requesting the following permissions": "Vyššie uvedená aplikácia vyžaduje nasledovné oprávnenia",
+	"This saves this consent as a pre-configured consent for future use": "Týmto sa uloží tento súhlas ako prednastavený pre budúce použitie",
+	"claims": {
+		"address": "Poštová adresa",
+		"birthdate": "Dátum narodenia",
+		"email": "E-mailová adresa",
+		"email_verified": "E-mailová adresa (overená)",
+		"family_name": "Priezvisko",
+		"gender": "Pohlavie",
+		"given_name": "Krstné meno",
+		"groups": "Členstvo v skupine",
+		"locale": "Jazyk / Locale",
+		"middle_name": "Stredné meno",
+		"name": "Zobrazované meno",
+		"nickname": "Prezývka",
+		"phone_number": "Telefónne číslo",
+		"phone_number_verified": "Telefónne číslo (overené)",
+		"picture": "URL obrázka",
+		"preferred_username": "Preferované používateľské meno",
+		"profile": "URL profilu",
+		"sub": "Jedinečný identifikátor",
+		"updated_at": "Čas aktualizácie profilu",
+		"website": "URL webovej stránky",
+		"zoneinfo": "Časové pásmo"
+	},
+	"scopes": {
+		"address": "Prístup k vašej adrese",
+		"authelia.bearer.authz": "Prístup k chráneným zdrojom prihláseným ako vy",
+		"email": "Prístup k vašim e-mailovým adresám",
+		"groups": "Prístup k vašemu členstvu v skupinách",
+		"offline_access": "Automaticky obnoviť tieto oprávnenia bez interakcie používateľa",
+		"openid": "Použite OpenID pre overenie vašej identity",
+		"phone": "Prístup k vášmu telefónnemu číslu",
+		"profile": "Prístup k informáciám o vašom profile"
+	}
+}

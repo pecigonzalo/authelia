@@ -1,6 +1,12 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package handlers
 
 import (
+	"errors"
+	"net/url"
 	"time"
 
 	"github.com/valyala/fasthttp"
@@ -21,15 +27,73 @@ var (
 
 const (
 	testXOriginalMethod = "X-Original-Method"
-	testXOriginalUrl    = "X-Original-Url"
+	testXOriginalUrl    = "X-Original-URL"
 	testBypass          = "bypass"
 	testWithoutAccept   = "WithoutAccept"
 	testWithXHRHeader   = "WithXHRHeader"
 )
 
+//nolint:gosec // Test Credentials.
 const (
-	testInactivity     = time.Second * 10
-	testRedirectionURL = "http://redirection.local"
-	testUsername       = "john"
-	exampleDotCom      = "example.com"
+	testBASE32TOTPSecret = "JVHFEUBXJ5CUWN2GGZGDMTKSJNMEQN2YGRJUQM2OKRHECR2QKJGFGRSQJVEVUT2HII2FQSJTKNIVQSCPIJIQ===="
+	testJWTSecret        = "abc"
 )
+
+const (
+	testInactivity           = time.Second * 10
+	testRedirectionURLString = "https://www.example.com"
+	testUsername             = "john"
+	testDisplayName          = "john"
+	testEmail                = "john@example.com"
+	exampleDotCom            = "example.com"
+)
+
+const (
+	testValue = "test"
+)
+
+var (
+	testRedirectionURL = func() *url.URL {
+		u, err := url.ParseRequestURI(testRedirectionURLString)
+		if err != nil {
+			panic(err)
+		}
+
+		return u
+	}()
+)
+
+//nolint:gosec // Test Credentials.
+const (
+	testOIDCClientSecretDigest = "$plaintext$client-secret"
+	testOIDCClientSecretValue  = "client-secret"
+)
+
+const (
+	testOIDCFormParameterGrantType    = "grant_type"
+	testOIDCFormParameterClientSecret = "client_secret"
+	testOIDCFormParameterCode         = "code"
+	testOIDCFormParameterToken        = "token"
+)
+
+const (
+	testOIDCScopeBearerAuthz      = "authelia.bearer.authz"
+	testOIDCFormParameterAudience = "audience"
+)
+
+const testOIDCClientCredentialsID = "client-credentials"
+
+const (
+	testOIDCAuthorizationCodeID = "authorization-code"
+	testOIDCRedirectURI         = "https://app.example.com/oidc/callback" //nolint:gosec // This is a redirection URI, not a credential.
+)
+
+const testOIDCDeviceCodeID = "device-code"
+
+const testOIDCKeyID = "rsa-default"
+
+const testOIDCClaimsPolicyMerged = "merged-audience"
+
+var testOIDCPreConfiguredDuration = time.Hour * 24
+
+var errTestSessionBackend = errors.New("backend unavailable")

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -8,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/valyala/fasthttp"
 
 	"github.com/authelia/authelia/v4/internal/duo"
 )
@@ -24,33 +29,37 @@ const (
 
 // ConfigureDuo configure duo api to allow or block auth requests.
 func ConfigureDuo(t *testing.T, allowDeny DuoPolicy) {
+	t.Helper()
+
 	url := fmt.Sprintf("%s/allow", DuoBaseURL)
 	if allowDeny == Deny {
 		url = fmt.Sprintf("%s/deny", DuoBaseURL)
 	}
 
-	req, err := http.NewRequest("POST", url, nil)
+	req, err := http.NewRequest(fasthttp.MethodPost, url, nil)
 	require.NoError(t, err)
 
 	client := NewHTTPClient()
 	res, err := client.Do(req)
 	require.NoError(t, err)
-	require.Equal(t, 200, res.StatusCode)
+	require.Equal(t, fasthttp.StatusOK, res.StatusCode)
 }
 
 // ConfigureDuoPreAuth configure duo api to respond with available devices or enrollment Url.
 func ConfigureDuoPreAuth(t *testing.T, response duo.PreAuthResponse) {
+	t.Helper()
+
 	url := fmt.Sprintf("%s/preauth", DuoBaseURL)
 
 	body, err := json.Marshal(response)
 	require.NoError(t, err)
 
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	req, err := http.NewRequest(fasthttp.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set(fasthttp.HeaderContentType, "application/json; charset=utf-8")
 	require.NoError(t, err)
 
 	client := NewHTTPClient()
 	res, err := client.Do(req)
 	require.NoError(t, err)
-	require.Equal(t, 200, res.StatusCode)
+	require.Equal(t, fasthttp.StatusOK, res.StatusCode)
 }

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package configuration
 
 import (
@@ -6,32 +10,39 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/knadh/koanf/parsers/json"
+	"github.com/knadh/koanf/parsers/toml/v2"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
-	"github.com/knadh/koanf/providers/env"
+	"github.com/knadh/koanf/providers/env/v2"
 	"github.com/knadh/koanf/providers/posflag"
 	"github.com/knadh/koanf/v2"
 	"github.com/spf13/pflag"
 
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
+	"github.com/authelia/authelia/v4/internal/utils"
 )
 
 // NewFileSource returns a configuration.Source configured to load from a specified path. If there is an issue
 // accessing this path it also returns an error.
 func NewFileSource(path string) (source *FileSource) {
 	return &FileSource{
-		koanf: koanf.New(constDelimiter),
-		path:  path,
+		koanf:     koanf.New(constDelimiter),
+		provider:  FilteredFileProvider(path),
+		providers: make(map[string]*FilteredFile),
+		path:      path,
 	}
 }
 
 // NewFilteredFileSource returns a configuration.Source configured to load from a specified path. If there is
 // an issue accessing this path it also returns an error.
-func NewFilteredFileSource(path string, filters ...FileFilter) (source *FileSource) {
+func NewFilteredFileSource(path string, filters ...BytesFilter) (source *FileSource) {
 	return &FileSource{
-		koanf:   koanf.New(constDelimiter),
-		path:    path,
-		filters: filters,
+		koanf:     koanf.New(constDelimiter),
+		provider:  FilteredFileProvider(path, filters...),
+		providers: make(map[string]*FilteredFile),
+		path:      path,
+		filters:   filters,
 	}
 }
 
@@ -47,7 +58,7 @@ func NewFileSources(paths []string) (sources []*FileSource) {
 }
 
 // NewFilteredFileSources returns a slice of configuration.Source configured to load from specified files.
-func NewFilteredFileSources(paths []string, filters []FileFilter) (sources []*FileSource) {
+func NewFilteredFileSources(paths []string, filters []BytesFilter) (sources []*FileSource) {
 	for _, path := range paths {
 		source := NewFilteredFileSource(path, filters...)
 
@@ -83,7 +94,9 @@ func (s *FileSource) Load(val *schema.StructValidator) (err error) {
 		return s.loadDir(val)
 	}
 
-	return s.koanf.Load(FilteredFileProvider(s.path, s.filters...), yaml.Parser())
+	parser, _ := fileParser(s.path)
+
+	return s.koanf.Load(s.provider, parser)
 }
 
 func (s *FileSource) loadDir(_ *schema.StructValidator) (err error) {
@@ -93,6 +106,117 @@ func (s *FileSource) loadDir(_ *schema.StructValidator) (err error) {
 		return err
 	}
 
+	var (
+		provider *FilteredFile
+		ok       bool
+	)
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		file := filepath.Join(s.path, entry.Name())
+
+		parser, known := fileParser(file)
+		if !known {
+			continue
+		}
+
+		if provider, ok = s.providers[file]; !ok {
+			provider = FilteredFileProvider(file, s.filters...)
+
+			s.providers[file] = provider
+		}
+
+		if err = s.koanf.Load(provider, parser); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func fileParser(file string) (parser koanf.Parser, known bool) {
+	switch filepath.Ext(file) {
+	case utils.ExtYAML, utils.ExtYML:
+		return yaml.Parser(), true
+	case utils.ExtTOML:
+		return toml.Parser(), true
+	case utils.ExtJSON:
+		return &jsonParser{JSON: json.Parser()}, true
+	default:
+		return yaml.Parser(), false
+	}
+}
+
+// jsonParser is a koanf.Parser for JSON which omits the top level '$schema' member, as it associates the file with a
+// JSON Schema and is not a configuration key.
+type jsonParser struct {
+	*json.JSON
+}
+
+// Unmarshal parses the given JSON bytes.
+func (p *jsonParser) Unmarshal(b []byte) (out map[string]any, err error) {
+	if out, err = p.JSON.Unmarshal(b); err != nil {
+		return nil, err
+	}
+
+	delete(out, "$schema")
+
+	return out, nil
+}
+
+// ReadFiles reads all the files associated with this FileSource.
+func (s *FileSource) ReadFiles() (files []*File, err error) {
+	if s.path == "" {
+		return nil, errors.New("invalid file path source configuration")
+	}
+
+	var info os.FileInfo
+
+	if info, err = os.Stat(s.path); err != nil {
+		return nil, err
+	}
+
+	if info.IsDir() {
+		return s.readFilesDirectory(s.path)
+	}
+
+	return s.readFilesFile(s.path)
+}
+
+func (s *FileSource) readFilesFile(path string) (files []*File, err error) {
+	var file *File
+
+	if file, err = s.readFile(path); err != nil {
+		return nil, err
+	}
+
+	return []*File{file}, nil
+}
+
+func (s *FileSource) readFile(path string) (file *File, err error) {
+	file = &File{
+		Path: path,
+	}
+
+	if file.Data, err = FilteredFileProvider(path, s.filters...).ReadBytes(); err != nil {
+		return nil, err
+	}
+
+	return file, err
+}
+
+func (s *FileSource) readFilesDirectory(path string) (files []*File, err error) {
+	var entries []os.DirEntry
+
+	if entries, err = os.ReadDir(path); err != nil {
+		return nil, err
+	}
+
+	var file *File
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -100,15 +224,79 @@ func (s *FileSource) loadDir(_ *schema.StructValidator) (err error) {
 
 		name := entry.Name()
 
-		switch ext := filepath.Ext(name); ext {
-		case ".yml", ".yaml":
-			if err = s.koanf.Load(FilteredFileProvider(filepath.Join(s.path, name), s.filters...), yaml.Parser()); err != nil {
-				return err
+		switch filepath.Ext(name) {
+		case utils.ExtYAML, utils.ExtYML, utils.ExtTOML, utils.ExtJSON:
+			if file, err = s.readFile(filepath.Join(path, name)); err != nil {
+				return nil, err
 			}
+
+			files = append(files, file)
 		}
 	}
 
-	return nil
+	return files, nil
+}
+
+// GetBytesFilterNames returns the names of the filters applied to this source.
+func (s *FileSource) GetBytesFilterNames() (names []string) {
+	names = make([]string, len(s.filters))
+
+	for i, filter := range s.filters {
+		names[i] = filter.Name()
+	}
+
+	return names
+}
+
+// NewBytesSource returns a configuration.Source configured to load from a specified bytes.
+func NewBytesSource(data []byte) (source *BytesSource) {
+	return &BytesSource{
+		koanf: koanf.New(constDelimiter),
+		data:  data,
+	}
+}
+
+// Name of the Source.
+func (b *BytesSource) Name() (name string) {
+	return fmt.Sprintf("bytes data(%s)", b.data)
+}
+
+// Merge the FileSource koanf.Koanf into the provided one.
+func (b *BytesSource) Merge(ko *koanf.Koanf, _ *schema.StructValidator) (err error) {
+	return ko.Merge(b.koanf)
+}
+
+// Load the Source into the FileSource koanf.Koanf.
+func (b *BytesSource) Load(val *schema.StructValidator) (err error) {
+	if b.data == nil {
+		return nil
+	}
+
+	return b.koanf.Load(b, yaml.Parser())
+}
+
+// ReadBytes reads the contents of a file on disk, passes it through any configured filters, and returns the bytes.
+func (b *BytesSource) ReadBytes() (data []byte, err error) {
+	if len(b.filters) == 0 {
+		return b.data, nil
+	}
+
+	data = make([]byte, len(b.data))
+
+	copy(data, b.data)
+
+	for _, filter := range b.filters {
+		if data, err = filter.Filter(data); err != nil {
+			return nil, err
+		}
+	}
+
+	return data, nil
+}
+
+// Read is not supported by the filtered file koanf.Provider.
+func (b *BytesSource) Read() (map[string]any, error) {
+	return nil, errors.New("filtered bytes provider does not support this method")
 }
 
 // NewEnvironmentSource returns a Source configured to load from environment variables.
@@ -132,9 +320,9 @@ func (s *EnvironmentSource) Merge(ko *koanf.Koanf, _ *schema.StructValidator) (e
 
 // Load the Source into the EnvironmentSource koanf.Koanf.
 func (s *EnvironmentSource) Load(_ *schema.StructValidator) (err error) {
-	keyMap, ignoredKeys := getEnvConfigMap(schema.Keys, s.prefix, s.delimiter)
+	keyMap, ignoredKeys := getEnvConfigMap(schema.Keys, s.prefix, s.delimiter, deprecations, deprecationsMKM)
 
-	return s.koanf.Load(env.ProviderWithValue(s.prefix, constDelimiter, koanfEnvironmentCallback(keyMap, ignoredKeys, s.prefix, s.delimiter)), nil)
+	return s.koanf.Load(env.Provider(constDelimiter, env.Opt{Prefix: s.prefix, TransformFunc: koanfEnvironmentCallback(keyMap, ignoredKeys, s.prefix, s.delimiter)}), nil)
 }
 
 // NewSecretsSource returns a Source configured to load from secrets.
@@ -166,9 +354,9 @@ func (s *SecretsSource) Merge(ko *koanf.Koanf, val *schema.StructValidator) (err
 
 // Load the Source into the SecretsSource koanf.Koanf.
 func (s *SecretsSource) Load(val *schema.StructValidator) (err error) {
-	keyMap := getSecretConfigMap(schema.Keys, s.prefix, s.delimiter)
+	keyMap := getSecretConfigMap(schema.Keys, s.prefix, s.delimiter, deprecations, deprecationsMKM)
 
-	return s.koanf.Load(env.ProviderWithValue(s.prefix, constDelimiter, koanfEnvironmentSecretsCallback(keyMap, val)), nil)
+	return s.koanf.Load(env.Provider(constDelimiter, env.Opt{Prefix: s.prefix, TransformFunc: koanfEnvironmentSecretsCallback(keyMap, val)}), nil)
 }
 
 // NewCommandLineSourceWithMapping creates a new command line configuration source with a map[string]string which converts
@@ -227,6 +415,8 @@ func (s *MapSource) Load(_ *schema.StructValidator) (err error) {
 
 // NewDefaultSources returns a slice of Source configured to load from specified YAML files.
 func NewDefaultSources(paths []string, prefix, delimiter string, additionalSources ...Source) (sources []Source) {
+	sources = []Source{NewMapSource(defaults)}
+
 	fileSources := NewFileSources(paths)
 	for _, source := range fileSources {
 		sources = append(sources, source)
@@ -243,7 +433,9 @@ func NewDefaultSources(paths []string, prefix, delimiter string, additionalSourc
 }
 
 // NewDefaultSourcesFiltered returns a slice of Source configured to load from specified YAML files.
-func NewDefaultSourcesFiltered(paths []string, filters []FileFilter, prefix, delimiter string, additionalSources ...Source) (sources []Source) {
+func NewDefaultSourcesFiltered(paths []string, filters []BytesFilter, prefix, delimiter string, additionalSources ...Source) (sources []Source) {
+	sources = []Source{NewMapSource(defaults)}
+
 	fileSources := NewFilteredFileSources(paths, filters)
 	for _, source := range fileSources {
 		sources = append(sources, source)
@@ -260,9 +452,11 @@ func NewDefaultSourcesFiltered(paths []string, filters []FileFilter, prefix, del
 }
 
 // NewDefaultSourcesWithDefaults returns a slice of Source configured to load from specified YAML files with additional sources.
-func NewDefaultSourcesWithDefaults(paths []string, filters []FileFilter, prefix, delimiter string, defaults Source, additionalSources ...Source) (sources []Source) {
-	if defaults != nil {
-		sources = []Source{defaults}
+func NewDefaultSourcesWithDefaults(paths []string, filters []BytesFilter, prefix, delimiter string, defaultSources []Source, additionalSources ...Source) (sources []Source) {
+	sources = []Source{NewMapSource(defaults)}
+
+	if len(defaultSources) != 0 {
+		sources = append(sources, defaultSources...)
 	}
 
 	if len(filters) == 0 {
@@ -272,4 +466,11 @@ func NewDefaultSourcesWithDefaults(paths []string, filters []FileFilter, prefix,
 	}
 
 	return sources
+}
+
+// NewDefaultsSource is a base configuration which sets defaults, this is particularly useful at the present time for
+// setting defaults that otherwise can't be set. In the future it can be used to generate documentation or be generated
+// by jsonschema. It will also reduce some areas of the validation package.
+func NewDefaultsSource() (source Source) {
+	return NewMapSource(mapDefaults)
 }

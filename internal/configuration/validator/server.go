@@ -1,75 +1,79 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package validator
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
-	"path"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
 	"github.com/authelia/authelia/v4/internal/utils"
 )
 
-// validateFileExists checks whether a file exist.
-func validateFileExists(path string, validator *schema.StructValidator, errTemplate string) {
-	exist, err := utils.FileExists(path)
-	if err != nil {
-		validator.Push(fmt.Errorf("tls: unable to check if file %s exists: %s", path, err))
-	}
-
-	if !exist {
-		validator.Push(fmt.Errorf(errTemplate, path))
-	}
-}
-
 // ValidateServerTLS checks a server TLS configuration is correct.
 func ValidateServerTLS(config *schema.Configuration, validator *schema.StructValidator) {
 	if config.Server.TLS.Key != "" && config.Server.TLS.Certificate == "" {
-		validator.Push(fmt.Errorf(errFmtServerTLSCert))
+		validator.Push(errors.New(errFmtServerTLSCert))
 	} else if config.Server.TLS.Key == "" && config.Server.TLS.Certificate != "" {
-		validator.Push(fmt.Errorf(errFmtServerTLSKey))
+		validator.Push(errors.New(errFmtServerTLSKey))
 	}
 
 	if config.Server.TLS.Key != "" {
-		validateFileExists(config.Server.TLS.Key, validator, errFmtServerTLSKeyFileDoesNotExist)
+		validateServerTLSFileExists("key", config.Server.TLS.Key, validator)
 	}
 
 	if config.Server.TLS.Certificate != "" {
-		validateFileExists(config.Server.TLS.Certificate, validator, errFmtServerTLSCertFileDoesNotExist)
+		validateServerTLSFileExists("certificate", config.Server.TLS.Certificate, validator)
 	}
 
 	if config.Server.TLS.Key == "" && config.Server.TLS.Certificate == "" &&
 		len(config.Server.TLS.ClientCertificates) > 0 {
-		validator.Push(fmt.Errorf(errFmtServerTLSClientAuthNoAuth))
+		validator.Push(errors.New(errFmtServerTLSClientAuthNoAuth))
 	}
 
 	for _, clientCertPath := range config.Server.TLS.ClientCertificates {
-		validateFileExists(clientCertPath, validator, errFmtServerTLSClientAuthCertFileDoesNotExist)
+		validateServerTLSFileExists("client_certificates", clientCertPath, validator)
 	}
 }
 
-// ValidateServer checks a server configuration is correct.
+func validateServerTLSFileExists(name, path string, validator *schema.StructValidator) {
+	var (
+		info os.FileInfo
+		err  error
+	)
+
+	switch info, err = os.Stat(path); {
+	case os.IsNotExist(err):
+		validator.Push(fmt.Errorf("server: tls: option '%s' with path '%s' refers to a file that doesn't exist", name, path))
+	case err != nil:
+		validator.Push(fmt.Errorf("server: tls: option '%s' with path '%s' could not be verified due to a file system error: %w", name, path, err))
+	case info.IsDir():
+		validator.Push(fmt.Errorf("server: tls: option '%s' with path '%s' refers to a directory but it should refer to a file", name, path))
+	}
+}
+
+// ValidateServer checks the server configuration is correct.
 func ValidateServer(config *schema.Configuration, validator *schema.StructValidator) {
-	if config.Server.Host == "" {
-		config.Server.Host = schema.DefaultServerConfiguration.Host
+	if config.Server.Headers.TrustedProxies.WalkXForwardedFor && !config.Server.Headers.TrustedProxies.Enable {
+		validator.Push(errors.New(errServerHeadersTrustedProxiesWalkNotEnabled))
 	}
 
-	if config.Server.Port == 0 {
-		config.Server.Port = schema.DefaultServerConfiguration.Port
+	if len(config.Server.Headers.TrustedProxies.Networks) != 0 && !config.Server.Headers.TrustedProxies.Enable {
+		validator.Push(errors.New(errServerHeadersTrustedProxiesNetworksNotEnabled))
 	}
 
+	ValidateServerAddress(config, validator)
 	ValidateServerTLS(config, validator)
-
-	switch {
-	case strings.Contains(config.Server.Path, "/"):
-		validator.Push(fmt.Errorf(errFmtServerPathNoForwardSlashes))
-	case !utils.IsStringAlphaNumeric(config.Server.Path):
-		validator.Push(fmt.Errorf(errFmtServerPathAlphaNum))
-	case config.Server.Path == "": // Don't do anything if it's blank.
-		break
-	default:
-		config.Server.Path = path.Clean("/" + config.Server.Path)
-	}
+	validateServerAssets(config, validator)
 
 	if config.Server.Buffers.Read <= 0 {
 		config.Server.Buffers.Read = schema.DefaultServerConfiguration.Buffers.Read
@@ -94,8 +98,41 @@ func ValidateServer(config *schema.Configuration, validator *schema.StructValida
 	ValidateServerEndpoints(config, validator)
 }
 
+// ValidateServerAddress checks the configured server address is correct.
+func ValidateServerAddress(config *schema.Configuration, validator *schema.StructValidator) {
+	if config.Server.Address == nil {
+		config.Server.Address = schema.DefaultServerConfiguration.Address
+	} else {
+		var err error
+		if err = config.Server.Address.ValidateHTTP(); err != nil {
+			validator.Push(fmt.Errorf(errFmtServerAddress, config.Server.Address.String(), err))
+		}
+	}
+
+	switch subpath := config.Server.Address.RouterPath(); {
+	case subpath == "":
+		config.Server.Address.SetPath("/")
+	case subpath != "/":
+		if p := strings.TrimPrefix(subpath, "/"); strings.Contains(p, "/") {
+			parts := strings.SplitN(subpath, "/", 3)
+			example := "/" + parts[1]
+
+			validator.Push(fmt.Errorf(errFmtServerPathNotEndForwardSlash, example, subpath))
+		} else if !utils.IsStringAlphaNumeric(p) {
+			validator.Push(fmt.Errorf(errFmtServerPathAlphaNumeric, subpath))
+		}
+	}
+
+	if config.Server.Address.IsUnixDomainSocket() || config.Server.Address.IsFileDescriptor() {
+		config.Server.DisableHealthcheck = true
+	}
+}
+
 // ValidateServerEndpoints configures the default endpoints and checks the configuration of custom endpoints.
 func ValidateServerEndpoints(config *schema.Configuration, validator *schema.StructValidator) {
+	validateServerEndpointsRateLimits(config, validator)
+	validateServerEndpointsHealth(config, validator)
+
 	if config.Server.Endpoints.EnableExpvars {
 		validator.PushWarning(fmt.Errorf("server: endpoints: option 'enable_expvars' should not be enabled in production"))
 	}
@@ -119,9 +156,7 @@ func ValidateServerEndpoints(config *schema.Configuration, validator *schema.Str
 	sort.Strings(authzs)
 
 	for _, name := range authzs {
-		endpoint := config.Server.Endpoints.Authz[name]
-
-		validateServerEndpointsAuthzEndpoint(config, name, endpoint, validator)
+		validateServerEndpointsAuthzEndpoint(config, name, validator)
 
 		for _, oName := range authzs {
 			oEndpoint := config.Server.Endpoints.Authz[oName]
@@ -131,7 +166,7 @@ func ValidateServerEndpoints(config *schema.Configuration, validator *schema.Str
 			}
 
 			switch oEndpoint.Implementation {
-			case authzImplementationLegacy, authzImplementationExtAuthz:
+			case schema.AuthzImplementationLegacy, schema.AuthzImplementationExtAuthz:
 				if strings.HasPrefix(name, oName+"/") {
 					validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzPrefixDuplicate, name, oName, oEndpoint.Implementation))
 				}
@@ -140,47 +175,397 @@ func ValidateServerEndpoints(config *schema.Configuration, validator *schema.Str
 			}
 		}
 
-		validateServerEndpointsAuthzStrategies(name, endpoint.AuthnStrategies, validator)
+		validateServerEndpointsAuthzStrategies(config, name, validator)
 	}
 }
 
-func validateServerEndpointsAuthzEndpoint(config *schema.Configuration, name string, endpoint schema.ServerAuthzEndpoint, validator *schema.StructValidator) {
+func validateServerAssets(config *schema.Configuration, validator *schema.StructValidator) {
+	if config.Server.AssetPath == "" {
+		return
+	}
+
+	if _, err := os.Stat(config.Server.AssetPath); err != nil {
+		switch {
+		case os.IsNotExist(err):
+			validator.Push(fmt.Errorf("server: asset_path: error occurred reading the '%s' directory: the directory does not exist", config.Server.AssetPath))
+		case os.IsPermission(err):
+			validator.Push(fmt.Errorf("server: asset_path: error occurred reading the '%s' directory: a permission error occurred trying to read the directory", config.Server.AssetPath))
+		default:
+			validator.Push(fmt.Errorf("server: asset_path: error occurred reading the '%s' directory: %w", config.Server.AssetPath, err))
+		}
+
+		return
+	}
+
+	var (
+		entries []fs.DirEntry
+		err     error
+	)
+	if entries, err = os.ReadDir(filepath.Join(config.Server.AssetPath, "locales")); err != nil {
+		if !os.IsNotExist(err) {
+			validator.Push(fmt.Errorf("server: asset_path: error occurred reading the '%s' directory: %w", filepath.Join(config.Server.AssetPath, "locales"), err))
+		}
+
+		return
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		locale := entry.Name()
+
+		var namespaceEntries []fs.DirEntry
+
+		if namespaceEntries, err = os.ReadDir(filepath.Join(config.Server.AssetPath, "locales", locale)); err != nil {
+			validator.Push(fmt.Errorf("server: asset_path: error occurred reading the '%s' directory: %w", filepath.Join(config.Server.AssetPath, "locales", locale), err))
+		}
+
+		for _, namespaceEntry := range namespaceEntries {
+			if namespaceEntry.IsDir() || !strings.HasSuffix(namespaceEntry.Name(), utils.ExtJSON) {
+				continue
+			}
+
+			path := filepath.Join(config.Server.AssetPath, "locales", locale, namespaceEntry.Name())
+
+			var (
+				data         []byte
+				translations map[string]any
+			)
+
+			if data, err = os.ReadFile(path); err != nil {
+				validator.Push(fmt.Errorf("server: asset_path: error occurred reading the '%s' file: %w", path, err))
+
+				continue
+			}
+
+			if err = json.Unmarshal(data, &translations); err != nil {
+				validator.Push(fmt.Errorf("server: asset_path: error occurred decoding the '%s' file: %w", path, err))
+
+				continue
+			}
+
+			validateServerAssetsIterate("", path, translations, validator)
+		}
+	}
+}
+
+func validateServerAssetsIterate(keyRoot, path string, translations map[string]any, validator *schema.StructValidator) {
+	for key, raw := range translations {
+		var (
+			value   string
+			fullkey string
+			sub     map[string]any
+			ok      bool
+		)
+
+		if keyRoot == "" {
+			fullkey = key
+		} else {
+			fullkey = strings.Join([]string{keyRoot, key}, ".")
+		}
+
+		if sub, ok = raw.(map[string]any); ok {
+			validateServerAssetsIterate(fullkey, path, sub, validator)
+
+			continue
+		}
+
+		if !strings.Contains(key, i18nAuthelia) {
+			continue
+		}
+
+		if value, ok = raw.(string); !ok {
+			validator.Push(fmt.Errorf("server: asset_path: error occurred decoding the '%s' file: translation key '%s' has a value which is not the required type", path, fullkey))
+
+			continue
+		}
+
+		if !strings.Contains(value, i18nAuthelia) {
+			validator.Push(fmt.Errorf("server: asset_path: error occurred decoding the '%s' file: translation key '%s' has a value which is missing a required placeholder", path, fullkey))
+
+			continue
+		}
+	}
+}
+
+func validateServerEndpointsHealth(config *schema.Configuration, validator *schema.StructValidator) {
+	health := &config.Server.Endpoints.Health
+
+	if len(health.Providers) == 0 {
+		health.Providers = make([]string, len(schema.DefaultServerConfiguration.Endpoints.Health.Providers))
+
+		copy(health.Providers, schema.DefaultServerConfiguration.Endpoints.Health.Providers)
+	} else {
+		seen := make(map[string]bool, len(health.Providers))
+
+		for _, provider := range health.Providers {
+			if !utils.IsStringInSlice(provider, schema.ProviderNames) {
+				validator.Push(fmt.Errorf(errFmtServerEndpointsHealthProviderUnknown, utils.StringJoinOr(schema.ProviderNames), provider))
+
+				continue
+			}
+
+			if seen[provider] {
+				validator.Push(fmt.Errorf(errFmtServerEndpointsHealthProviderDuplicate, provider))
+			}
+
+			seen[provider] = true
+		}
+	}
+
+	switch {
+	case health.Cache == nil:
+		cache := *schema.DefaultServerConfiguration.Endpoints.Health.Cache
+
+		health.Cache = &cache
+	case *health.Cache < 0:
+		validator.Push(fmt.Errorf(errFmtServerEndpointsHealthCacheNegative, *health.Cache))
+	}
+
+	if health.Detailed && !health.Verbose {
+		validator.PushWarning(errors.New(errFmtServerEndpointsHealthDetailedNotVerbose))
+	}
+}
+
+func validateServerEndpointsRateLimits(config *schema.Configuration, validator *schema.StructValidator) {
+	defaults := schema.DefaultServerConfiguration.Endpoints.RateLimits.Endpoints()
+
+	for i, endpoint := range config.Server.Endpoints.RateLimits.Endpoints() {
+		validateServerEndpointsRateLimitDefault(config, endpoint, defaults[i].Config.Buckets, validator)
+	}
+}
+
+func validateServerEndpointsRateLimitDefault(config *schema.Configuration, endpoint schema.ServerEndpointRateLimitEndpoint, defaults []schema.ServerEndpointRateLimitBucket, validator *schema.StructValidator) {
+	validateServerEndpointsRateLimitIPv6Mask(endpoint.Name, endpoint.Config, validator)
+
+	if len(endpoint.Config.Buckets) == 0 {
+		endpoint.Config.Buckets = make([]schema.ServerEndpointRateLimitBucket, len(defaults))
+
+		copy(endpoint.Config.Buckets, defaults)
+
+		if endpoint.Weight != nil {
+			weight := endpoint.Weight(config)
+
+			for i := range endpoint.Config.Buckets {
+				endpoint.Config.Buckets[i].Period *= weight
+			}
+		}
+
+		return
+	}
+
+	validateServerEndpointsRateLimitBuckets(endpoint.Name, endpoint.Config, validator)
+}
+
+func validateServerEndpointsRateLimitIPv6Mask(name string, config *schema.ServerEndpointRateLimit, validator *schema.StructValidator) {
+	switch {
+	case config.IPv6Mask == 0:
+		config.IPv6Mask = schema.DefaultServerEndpointRateLimitIPv6Mask
+	case config.IPv6Mask < schema.MinimumServerEndpointRateLimitIPv6Mask, config.IPv6Mask > schema.MaximumServerEndpointRateLimitIPv6Mask:
+		validator.Push(fmt.Errorf(errFmtServerEndpointsRateLimitsIPv6Mask, name, config.IPv6Mask, schema.MinimumServerEndpointRateLimitIPv6Mask, schema.MaximumServerEndpointRateLimitIPv6Mask))
+	}
+}
+
+func validateServerEndpointsRateLimitBuckets(name string, config *schema.ServerEndpointRateLimit, validator *schema.StructValidator) {
+	for i, bucket := range config.Buckets {
+		if bucket.Period == 0 {
+			validator.Push(fmt.Errorf(errFmtServerEndpointsRateLimitsBucketPeriodZero, name, i+1))
+		} else if bucket.Period < (time.Second * 10) {
+			validator.Push(fmt.Errorf(errFmtServerEndpointsRateLimitsBucketPeriodTooLow, name, i+1, bucket.Period))
+		}
+
+		if bucket.Requests <= 0 {
+			validator.Push(fmt.Errorf(errFmtServerEndpointsRateLimitsBucketRequestsZero, name, i+1, bucket.Requests))
+		}
+	}
+}
+
+func validateServerEndpointsAuthzEndpoint(config *schema.Configuration, name string, validator *schema.StructValidator) {
+	endpoint := config.Server.Endpoints.Authz[name]
+
 	if name == legacy {
 		switch endpoint.Implementation {
-		case authzImplementationLegacy:
+		case schema.AuthzImplementationLegacy:
 			break
 		case "":
-			endpoint.Implementation = authzImplementationLegacy
-
-			config.Server.Endpoints.Authz[name] = endpoint
+			endpoint.Implementation = schema.AuthzImplementationLegacy
 		default:
 			if !utils.IsStringInSlice(endpoint.Implementation, validAuthzImplementations) {
-				validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzImplementation, name, strings.Join(validAuthzImplementations, "', '"), endpoint.Implementation))
+				validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzImplementation, name, utils.StringJoinOr(validAuthzImplementations), endpoint.Implementation))
 			} else {
 				validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzLegacyInvalidImplementation, name))
 			}
 		}
 	} else if !utils.IsStringInSlice(endpoint.Implementation, validAuthzImplementations) {
-		validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzImplementation, name, strings.Join(validAuthzImplementations, "', '"), endpoint.Implementation))
+		validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzImplementation, name, utils.StringJoinOr(validAuthzImplementations), endpoint.Implementation))
 	}
 
 	if !reAuthzEndpointName.MatchString(name) {
 		validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzInvalidName, name))
 	}
+
+	// NOTE: With exclusion of the implementation set any options below this line.
+	if endpoint.Implementation == schema.AuthzImplementationLegacy && endpoint.Headers != nil {
+		validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzOptionLegacy, name, "headers"))
+	}
+
+	if endpoint.Headers == nil {
+		switch endpoint.Implementation {
+		case schema.AuthzImplementationLegacy:
+			break
+		case schema.AuthzImplementationAuthRequest:
+			endpoint.Headers = schema.DefaultServerConfiguration.Endpoints.Authz[schema.AuthzEndpointNameAuthRequest].Headers
+		case schema.AuthzImplementationExtAuthz:
+			endpoint.Headers = schema.DefaultServerConfiguration.Endpoints.Authz[schema.AuthzEndpointNameExtAuthz].Headers
+		case schema.AuthzImplementationForwardAuth:
+			endpoint.Headers = schema.DefaultServerConfiguration.Endpoints.Authz[schema.AuthzEndpointNameForwardAuth].Headers
+		}
+	} else {
+		validateServerEndpointsAuthzEndpointHeaders(config, name, endpoint, validator)
+	}
+
+	config.Server.Endpoints.Authz[name] = endpoint
 }
 
-func validateServerEndpointsAuthzStrategies(name string, strategies []schema.ServerAuthzEndpointAuthnStrategy, validator *schema.StructValidator) {
-	names := make([]string, len(strategies))
+func validateServerEndpointsAuthzEndpointHeaders(config *schema.Configuration, name string, endpoint schema.ServerEndpointsAuthz, validator *schema.StructValidator) {
+	headers := make([]string, 0, len(endpoint.Headers))
 
-	for _, strategy := range strategies {
-		if utils.IsStringInSlice(strategy.Name, names) {
+	for header := range endpoint.Headers {
+		headers = append(headers, header)
+	}
+
+	sort.Strings(headers)
+
+	seen := make(map[string]string, len(headers))
+
+	for _, header := range headers {
+		validateServerEndpointsAuthzEndpointHeaderName(name, header, seen, validator)
+
+		switch attribute := endpoint.Headers[header].UserAttribute; {
+		case attribute == "":
+			validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzHeaderUserAttributeMissing, name, header))
+		case !isUserAttributeValidAuthz(attribute, config):
+			validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzHeaderUserAttribute, name, header, attribute))
+		}
+	}
+}
+
+func validateServerEndpointsAuthzEndpointHeaderName(name, header string, seen map[string]string, validator *schema.StructValidator) {
+	if !reAuthzEndpointHeaderName.MatchString(header) {
+		validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzHeaderInvalidName, name, header))
+
+		return
+	}
+
+	key := strings.ToLower(header)
+
+	if first, ok := seen[key]; ok {
+		validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzHeaderDuplicateName, name, header, first))
+
+		return
+	}
+
+	seen[key] = header
+
+	if utils.IsStringInSlice(key, reservedAuthzEndpointHeaderNames) {
+		validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzHeaderReservedName, name, header))
+
+		return
+	}
+
+	for _, prefix := range reservedAuthzEndpointHeaderPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzHeaderReservedName, name, header))
+
+			return
+		}
+	}
+}
+
+func isUserAttributeValidAuthz(name string, config *schema.Configuration) (valid bool) {
+	if _, ok := config.Definitions.UserAttributes[name]; ok {
+		return true
+	}
+
+	switch name {
+	case attributeUserEmailVerified, attributeUserEmailsExtra, attributeUserUpdatedAt:
+		return true
+	case attributeUserPhoneNumberRFC3966, attributeUserPhoneNumberVerified:
+		return isUserAttributeValid(attributeUserPhoneNumber, config)
+	case attributeUserAddress:
+		return isUserAttributeValid(attributeUserStreetAddress, config) ||
+			isUserAttributeValid(attributeUserLocality, config) ||
+			isUserAttributeValid(attributeUserRegion, config) ||
+			isUserAttributeValid(attributeUserPostalCode, config) ||
+			isUserAttributeValid(attributeUserCountry, config)
+	default:
+		return isUserAttributeValid(name, config)
+	}
+}
+
+//nolint:gocyclo
+func validateServerEndpointsAuthzStrategies(config *schema.Configuration, name string, validator *schema.StructValidator) {
+	endpoint := config.Server.Endpoints.Authz[name]
+
+	var defaults []schema.ServerEndpointsAuthzAuthnStrategy
+
+	switch endpoint.Implementation {
+	case schema.AuthzImplementationLegacy:
+		defaults = schema.DefaultServerConfiguration.Endpoints.Authz[schema.AuthzEndpointNameLegacy].AuthnStrategies
+	case schema.AuthzImplementationAuthRequest:
+		defaults = schema.DefaultServerConfiguration.Endpoints.Authz[schema.AuthzEndpointNameAuthRequest].AuthnStrategies
+	case schema.AuthzImplementationExtAuthz:
+		defaults = schema.DefaultServerConfiguration.Endpoints.Authz[schema.AuthzEndpointNameExtAuthz].AuthnStrategies
+	case schema.AuthzImplementationForwardAuth:
+		defaults = schema.DefaultServerConfiguration.Endpoints.Authz[schema.AuthzEndpointNameForwardAuth].AuthnStrategies
+	}
+
+	if len(config.Server.Endpoints.Authz[name].AuthnStrategies) == 0 {
+		endpoint.AuthnStrategies = make([]schema.ServerEndpointsAuthzAuthnStrategy, len(defaults))
+
+		copy(endpoint.AuthnStrategies, defaults)
+
+		config.Server.Endpoints.Authz[name] = endpoint
+
+		return
+	}
+
+	names := make([]string, 0, len(endpoint.AuthnStrategies))
+
+	for i, strategy := range endpoint.AuthnStrategies {
+		if strategy.Name != "" && utils.IsStringInSlice(strategy.Name, names) {
 			validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzStrategyDuplicate, name, strategy.Name))
 		}
 
 		names = append(names, strategy.Name)
 
-		if !utils.IsStringInSlice(strategy.Name, validAuthzAuthnStrategies) {
-			validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzStrategy, name, strings.Join(validAuthzAuthnStrategies, "', '"), strategy.Name))
+		if strategy.SchemeBasicCacheLifespan > 0 && !utils.IsStringInSliceFold(schema.SchemeBasic, strategy.Schemes) {
+			validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzStrategySchemeOnlyOption, name, i+1, "scheme_basic_cache_lifespan", schema.SchemeBasic, utils.StringJoinAnd(strategy.Schemes)))
+		}
+
+		switch {
+		case strategy.Name == "":
+			validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzStrategyNoName, name, i+1))
+		case !utils.IsStringInSlice(strategy.Name, validAuthzAuthnStrategies):
+			validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzStrategy, name, utils.StringJoinOr(validAuthzAuthnStrategies), strategy.Name))
+		default:
+			if utils.IsStringInSlice(strategy.Name, validAuthzAuthnHeaderStrategies) {
+				if len(strategy.Schemes) == 0 {
+					endpoint.AuthnStrategies[i].Schemes = defaults[0].Schemes
+				} else {
+					for _, scheme := range strategy.Schemes {
+						if !utils.IsStringInSliceFold(scheme, validAuthzAuthnStrategySchemes) {
+							validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzSchemes, name, i+1, strategy.Name, utils.StringJoinOr(validAuthzAuthnStrategySchemes), scheme))
+						}
+					}
+				}
+			} else if len(strategy.Schemes) != 0 {
+				validator.Push(fmt.Errorf(errFmtServerEndpointsAuthzSchemesInvalidForStrategy, name, i+1, strategy.Name))
+			}
 		}
 	}
+
+	config.Server.Endpoints.Authz[name] = endpoint
 }

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # CI/Git Directories
 coverage.txt
 Dockerfile*
@@ -16,8 +20,8 @@ examples
 # Other
 internal/server/public_html
 authelia.service
+authelia-fb-rc.d
 bootstrap.sh
 
 # Overrides
 !.healthcheck.env
-!.local

@@ -1,0 +1,13 @@
+---
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+title: "Prologue"
+description: "The prologue section for Authelia integration documentation covering introductory information, getting started guides, and an integration architecture overview."
+summary: ""
+date: 2024-03-14T06:00:14+11:00
+draft: false
+images: []
+weight: 100
+---

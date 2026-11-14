@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package templates
 
 import (
@@ -9,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	tt "text/template"
+	"time"
 )
 
 const (
@@ -59,7 +64,7 @@ func readTemplate(name, ext, category, overridePath string) (tPath string, embed
 		}
 	}
 
-	tPath = path.Join("src", category, name+ext)
+	tPath = path.Join("embed", category, name+ext)
 
 	if data, err = embedFS.ReadFile(tPath); err != nil {
 		return tPath, true, nil, fmt.Errorf("failed to read embedded template '%s': %w", tPath, err)
@@ -102,19 +107,19 @@ func loadEmailTemplate(name, overridePath string) (t *EmailTemplate, err error) 
 	t = &EmailTemplate{}
 
 	if tpath, embed, data, err = readTemplate(name, extText, TemplateCategoryNotifications, overridePath); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error occurred reading text template: %w", err)
 	}
 
 	if t.Text, err = parseTextTemplate(name, tpath, embed, data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error occurred parsing text template: %w", err)
 	}
 
 	if tpath, embed, data, err = readTemplate(name, extHTML, TemplateCategoryNotifications, overridePath); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error occurred reading html template: %w", err)
 	}
 
 	if t.HTML, err = parseHTMLTemplate(name, tpath, embed, data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error occurred parsing html template: %w", err)
 	}
 
 	return t, nil
@@ -170,4 +175,31 @@ func strslice(v any) []string {
 			return []string{strval(v)}
 		}
 	}
+}
+
+func formatHTMLTimeWithLocation(date time.Time, location *time.Location) string {
+	return formatTimeWithLocation(time.DateOnly, date, location)
+}
+
+func formatTimeWithLocation(format string, date time.Time, location *time.Location) string {
+	return date.In(location).Format(format)
+}
+
+func convertAnyToTime(date any) (t time.Time) {
+	switch v := date.(type) {
+	case time.Time:
+		t = v
+	case *time.Time:
+		t = *v
+	case int64:
+		t = time.Unix(v, 0)
+	case int:
+		t = time.Unix(int64(v), 0)
+	case int32:
+		t = time.Unix(int64(v), 0)
+	default:
+		t = time.Now()
+	}
+
+	return t
 }

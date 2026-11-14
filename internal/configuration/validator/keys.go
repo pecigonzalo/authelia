@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package validator
 
 import (
@@ -11,7 +15,7 @@ import (
 )
 
 // ValidateKeys determines if all provided keys are valid.
-func ValidateKeys(keys []string, prefix string, validator *schema.StructValidator) {
+func ValidateKeys(keys, remapped []string, prefix string, validator *schema.StructValidator) {
 	var errStrings []string
 
 	var patterns []*regexp.Regexp
@@ -19,8 +23,8 @@ func ValidateKeys(keys []string, prefix string, validator *schema.StructValidato
 	for _, key := range schema.Keys {
 		pattern, _ := NewKeyPattern(key)
 
-		switch {
-		case pattern == nil:
+		switch pattern {
+		case nil:
 			continue
 		default:
 			patterns = append(patterns, pattern)
@@ -46,6 +50,10 @@ KEYS:
 			}
 		}
 
+		if utils.IsStringInSlice(expectedKey, remapped) {
+			continue
+		}
+
 		if err, ok := specificErrorKeys[expectedKey]; ok {
 			if !utils.IsStringInSlice(err, errStrings) {
 				errStrings = append(errStrings, err)
@@ -67,16 +75,18 @@ KEYS:
 // NewKeyPattern returns patterns which are required to match key patterns.
 func NewKeyPattern(key string) (pattern *regexp.Regexp, err error) {
 	switch {
-	case strings.Contains(key, ".*."):
+	case reIsMapKey.MatchString(key):
 		return NewKeyMapPattern(key)
 	default:
 		return nil, nil
 	}
 }
 
+var reIsMapKey = regexp.MustCompile(`\.\*(\[]|\.|$)`)
+
 // NewKeyMapPattern returns a pattern required to match map keys.
 func NewKeyMapPattern(key string) (pattern *regexp.Regexp, err error) {
-	parts := strings.Split(key, ".*.")
+	parts := strings.Split(key, ".*")
 
 	buf := &strings.Builder{}
 
@@ -85,11 +95,19 @@ func NewKeyMapPattern(key string) (pattern *regexp.Regexp, err error) {
 	n := len(parts) - 1
 
 	for i, part := range parts {
-		if i != 0 {
+		if i != 0 && !strings.HasPrefix(part, "[]") {
+			if len(parts) == i+1 && strings.HasSuffix(key, ".*") {
+				continue
+			}
+
 			buf.WriteString("\\.")
 		}
 
-		for _, r := range part {
+		for j, r := range part {
+			if j == 0 && r == '.' {
+				continue
+			}
+
 			switch r {
 			case '[', ']', '.', '{', '}':
 				buf.WriteRune('\\')
@@ -100,7 +118,7 @@ func NewKeyMapPattern(key string) (pattern *regexp.Regexp, err error) {
 		}
 
 		if i < n {
-			buf.WriteString("\\.[a-z0-9]([a-z0-9-_]+)?[a-z0-9]")
+			buf.WriteString("\\.[a-zA-Z0-9](([a-zA-Z0-9/_.:~-]+)?[a-zA-Z0-9])?")
 		}
 	}
 

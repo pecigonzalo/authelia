@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package handlers
 
 import (
@@ -6,13 +10,13 @@ import (
 	"github.com/valyala/fasthttp"
 
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
-	"github.com/authelia/authelia/v4/internal/utils"
+	"github.com/authelia/authelia/v4/internal/model"
 )
 
 // NewAuthzBuilder creates a new AuthzBuilder.
 func NewAuthzBuilder() *AuthzBuilder {
 	return &AuthzBuilder{
-		config: AuthzConfig{RefreshInterval: time.Second * -1},
+		config: AuthzConfig{RefreshInterval: schema.NewRefreshIntervalDurationAlways()},
 	}
 }
 
@@ -62,27 +66,26 @@ func (b *AuthzBuilder) WithConfig(config *schema.Configuration) *AuthzBuilder {
 		return b
 	}
 
-	var refreshInterval time.Duration
-
-	switch config.AuthenticationBackend.RefreshInterval {
-	case schema.ProfileRefreshDisabled:
-		refreshInterval = time.Second * -1
-	case schema.ProfileRefreshAlways:
-		refreshInterval = time.Second * 0
-	default:
-		refreshInterval, _ = utils.ParseDurationString(config.AuthenticationBackend.RefreshInterval)
-	}
-
 	b.config = AuthzConfig{
-		RefreshInterval: refreshInterval,
+		RefreshInterval: config.AuthenticationBackend.RefreshInterval,
 	}
+
+	return b
+}
+
+// WithEndpointHeaders configures the AuthzBuilder with the response headers for this endpoint.
+func (b *AuthzBuilder) WithEndpointHeaders(headers map[string]schema.ServerEndpointsAuthzHeader) *AuthzBuilder {
+	b.headers = headers
 
 	return b
 }
 
 // WithEndpointConfig configures the AuthzBuilder with a *schema.ServerAuthzEndpointConfig. Should be called AFTER
 // WithConfig or WithAuthzConfig.
-func (b *AuthzBuilder) WithEndpointConfig(config schema.ServerAuthzEndpoint) *AuthzBuilder {
+func (b *AuthzBuilder) WithEndpointConfig(config schema.ServerEndpointsAuthz) *AuthzBuilder {
+	b.disableAccessDeniedRedirect = config.DisableAccessDeniedRedirect
+	b.WithEndpointHeaders(config.Headers)
+
 	switch config.Implementation {
 	case AuthzImplForwardAuth.String():
 		b.WithImplementationForwardAuth()
@@ -101,11 +104,11 @@ func (b *AuthzBuilder) WithEndpointConfig(config schema.ServerAuthzEndpoint) *Au
 		case AuthnStrategyCookieSession:
 			b.strategies = append(b.strategies, NewCookieSessionAuthnStrategy(b.config.RefreshInterval))
 		case AuthnStrategyHeaderAuthorization:
-			b.strategies = append(b.strategies, NewHeaderAuthorizationAuthnStrategy())
+			b.strategies = append(b.strategies, NewHeaderAuthorizationAuthnStrategy(strategy.SchemeBasicCacheLifespan, strategy.Schemes...))
 		case AuthnStrategyHeaderProxyAuthorization:
-			b.strategies = append(b.strategies, NewHeaderProxyAuthorizationAuthnStrategy())
+			b.strategies = append(b.strategies, NewHeaderProxyAuthorizationAuthnStrategy(strategy.SchemeBasicCacheLifespan, strategy.Schemes...))
 		case AuthnStrategyHeaderAuthRequestProxyAuthorization:
-			b.strategies = append(b.strategies, NewHeaderProxyAuthorizationAuthRequestAuthnStrategy())
+			b.strategies = append(b.strategies, NewHeaderProxyAuthorizationAuthRequestAuthnStrategy(strategy.SchemeBasicCacheLifespan, strategy.Schemes...))
 		case AuthnStrategyHeaderLegacy:
 			b.strategies = append(b.strategies, NewHeaderLegacyAuthnStrategy())
 		}
@@ -130,30 +133,56 @@ func (b *AuthzBuilder) Build() (authz *Authz) {
 		case AuthzImplLegacy:
 			authz.strategies = []AuthnStrategy{NewHeaderLegacyAuthnStrategy(), NewCookieSessionAuthnStrategy(b.config.RefreshInterval)}
 		case AuthzImplAuthRequest:
-			authz.strategies = []AuthnStrategy{NewHeaderProxyAuthorizationAuthRequestAuthnStrategy(), NewCookieSessionAuthnStrategy(b.config.RefreshInterval)}
+			authz.strategies = []AuthnStrategy{NewHeaderProxyAuthorizationAuthRequestAuthnStrategy(time.Duration(0), model.AuthorizationSchemeBasic.String()), NewCookieSessionAuthnStrategy(b.config.RefreshInterval)}
 		default:
-			authz.strategies = []AuthnStrategy{NewHeaderProxyAuthorizationAuthnStrategy(), NewCookieSessionAuthnStrategy(b.config.RefreshInterval)}
+			authz.strategies = []AuthnStrategy{NewHeaderProxyAuthorizationAuthnStrategy(time.Duration(0), model.AuthorizationSchemeBasic.String()), NewCookieSessionAuthnStrategy(b.config.RefreshInterval)}
+		}
+	}
+
+	for header, config := range b.headers {
+		authz.headers = append(authz.headers, AuthzHeader{Key: []byte(header), Attribute: config.UserAttribute})
+	}
+
+	extended := authzHeadersRequireExtendedUserDetails(authz.headers)
+
+	for _, v := range authz.strategies {
+		switch strategy := v.(type) {
+		case *CookieSessionAuthnStrategy:
+			strategy.extended = extended
+		case *HeaderAuthnStrategy:
+			strategy.extended = extended
+		case *HeaderLegacyAuthnStrategy:
+			strategy.extended = extended
 		}
 	}
 
 	switch b.implementation {
 	case AuthzImplLegacy:
 		authz.config.StatusCodeBadRequest = fasthttp.StatusUnauthorized
+		authz.handleAuthorized = handleAuthzAuthorizedLegacy
 		authz.handleGetObject = handleAuthzGetObjectLegacy
 		authz.handleUnauthorized = handleAuthzUnauthorizedLegacy
+		authz.handleForbidden = handleAuthzForbiddenStandard
 		authz.handleGetAutheliaURL = handleAuthzPortalURLLegacy
 	case AuthzImplForwardAuth:
 		authz.handleGetObject = handleAuthzGetObjectForwardAuth
-		authz.handleUnauthorized = handleAuthzUnauthorizedForwardAuth
+		authz.handleUnauthorized = handleAuthzUnauthorizedCommon
+		authz.handleForbidden = handleAuthzForbiddenCommon
 		authz.handleGetAutheliaURL = handleAuthzPortalURLFromQuery
 	case AuthzImplAuthRequest:
 		authz.handleGetObject = handleAuthzGetObjectAuthRequest
 		authz.handleUnauthorized = handleAuthzUnauthorizedAuthRequest
+		authz.handleForbidden = handleAuthzForbiddenAuthRequest
 		authz.handleGetAutheliaURL = handleAuthzPortalURLFromQuery
 	case AuthzImplExtAuthz:
 		authz.handleGetObject = handleAuthzGetObjectExtAuthz
-		authz.handleUnauthorized = handleAuthzUnauthorizedExtAuthz
+		authz.handleUnauthorized = handleAuthzUnauthorizedCommon
+		authz.handleForbidden = handleAuthzForbiddenCommon
 		authz.handleGetAutheliaURL = handleAuthzPortalURLFromHeader
+	}
+
+	if b.disableAccessDeniedRedirect {
+		authz.handleForbidden = handleAuthzForbiddenStandard
 	}
 
 	return authz

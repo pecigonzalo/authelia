@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package cmd
 
 import (
@@ -24,6 +28,6 @@ func newServeCmd() (cmd *cobra.Command) {
 
 func cmdServeRun(_ *cobra.Command, args []string) {
 	log.Infof("Running Authelia with config %s...", args[0])
-	execCmd := utils.CommandWithStdout(OutputDir+"/authelia", "--config", args[0])
+	execCmd := utils.CommandWithStdout(OutputDir+pathAuthelia, "--config", args[0])
 	utils.RunCommandUntilCtrlC(execCmd)
 }

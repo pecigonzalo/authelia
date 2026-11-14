@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { StatePath } from "@services/Api";
 import { Get } from "@services/Client";
 
@@ -10,6 +14,8 @@ export enum AuthenticationLevel {
 export interface AutheliaState {
     username: string;
     authentication_level: AuthenticationLevel;
+    factor_knowledge: boolean;
+    default_redirection_url?: string;
 }
 
 export async function getState(): Promise<AutheliaState> {

@@ -1,0 +1,82 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package webauthn
+
+import (
+	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/webauthn"
+
+	"github.com/authelia/authelia/v4/internal/configuration/schema"
+	"github.com/authelia/authelia/v4/internal/model"
+)
+
+// VerifyCredential verifies a credential with the MDS.
+//
+//nolint:gocyclo
+func VerifyCredential(config *schema.WebAuthn, credential *model.WebAuthnCredential, mds MetaDataProvider) (result VerifyCredentialResult) {
+	var (
+		c   *webauthn.Credential
+		err error
+	)
+	if c, err = credential.ToCredential(); err != nil {
+		result.Malformed = true
+	}
+
+	if len(credential.Attestation) == 0 {
+		result.MissingStatement = true
+	} else if c != nil && mds != nil {
+		if err = c.Verify(mds, protocol.AttestationPolicy{}, protocol.SignaturePolicy{}); err != nil {
+			result.ErrorMetadataValidation = err
+			result.MetaDataValidationError = true
+		}
+	}
+
+	if credential.AttestationType == "" && c != nil && c.AttestationType != "" {
+		credential.AttestationType = c.AttestationType
+	}
+
+	if config.Filtering.ProhibitBackupEligibility && credential.BackupEligible {
+		result.IsProhibitedBackupEligibility = true
+	}
+
+	if len(config.Filtering.PermittedAAGUIDs) != 0 {
+		found := false
+
+		for _, aaguid := range config.Filtering.PermittedAAGUIDs {
+			if credential.AAGUID.UUID == aaguid {
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			result.IsProhibitedAAGUID = true
+		}
+	}
+
+	if !result.IsProhibitedAAGUID {
+		for _, aaguid := range config.Filtering.ProhibitedAAGUIDs {
+			if credential.AAGUID.UUID == aaguid {
+				result.IsProhibitedAAGUID = true
+
+				break
+			}
+		}
+	}
+
+	return result
+}
+
+// VerifyCredentialResult represents the result of verifying a WebAuthn credential against the configured filters.
+type VerifyCredentialResult struct {
+	Malformed                     bool
+	MissingStatement              bool
+	IsProhibitedBackupEligibility bool
+	IsProhibitedAAGUID            bool
+	MetaDataValidationError       bool
+
+	ErrorMetadataValidation error
+}

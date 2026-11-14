@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package configuration
 
 import (
@@ -20,6 +24,23 @@ func TestShouldGenerateConfiguration(t *testing.T) {
 	created, err := EnsureConfigurationExists(cfg)
 	assert.NoError(t, err)
 	assert.True(t, created)
+
+	_, err = os.Stat(cfg)
+	assert.NoError(t, err)
+}
+
+func TestNotShouldGenerateConfigurationIfExists(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := filepath.Join(dir, "config.yml")
+
+	created, err := EnsureConfigurationExists(cfg)
+	assert.NoError(t, err)
+	assert.True(t, created)
+
+	created, err = EnsureConfigurationExists(cfg)
+	assert.NoError(t, err)
+	assert.False(t, created)
 
 	_, err = os.Stat(cfg)
 	assert.NoError(t, err)

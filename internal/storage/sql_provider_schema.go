@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package storage
 
 import (
@@ -7,13 +11,44 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/rpadovani/sqlx-v2"
 
 	"github.com/authelia/authelia/v4/internal/model"
 	"github.com/authelia/authelia/v4/internal/utils"
 )
 
-// SchemaTables returns a list of tables.
+func (p *SQLProvider) truncate(ctx context.Context, conn SQLXConnection, table string) (err error) {
+	switch p.name {
+	case providerMySQL:
+		_, err = conn.ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s;", table))
+	case providerPostgres:
+		_, err = conn.ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE;", table))
+	case providerSQLite:
+		err = p.truncateSQLite3(ctx, conn, table)
+	default:
+		err = fmt.Errorf("unsupported provider: %s", p.name)
+	}
+
+	if err != nil {
+		return fmt.Errorf("error occurred truncating table '%s': %w", table, err)
+	}
+
+	return nil
+}
+
+func (p *SQLProvider) truncateSQLite3(ctx context.Context, conn SQLXConnection, table string) (err error) {
+	if _, err = conn.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s;", table)); err != nil {
+		return fmt.Errorf("error occurred performing the delete: %w", err)
+	}
+
+	if _, err = conn.ExecContext(ctx, "DELETE FROM sqlite_sequence WHERE name = ?;", table); err != nil {
+		return fmt.Errorf("error occurred deleting the start sequence: %w", err)
+	}
+
+	return nil
+}
+
+// SchemaTables returns a list of tables from the storage provider.
 func (p *SQLProvider) SchemaTables(ctx context.Context) (tables []string, err error) {
 	var rows *sqlx.Rows
 
@@ -48,7 +83,7 @@ func (p *SQLProvider) SchemaTables(ctx context.Context) (tables []string, err er
 	return tables, nil
 }
 
-// SchemaVersion returns the version of the schema.
+// SchemaVersion returns the version of the schema from the storage provider.
 func (p *SQLProvider) SchemaVersion(ctx context.Context) (version int, err error) {
 	tables, err := p.SchemaTables(ctx)
 	if err != nil {
@@ -81,44 +116,12 @@ func (p *SQLProvider) SchemaVersion(ctx context.Context) (version int, err error
 	return 0, nil
 }
 
-// SchemaLatestVersion returns the latest version available for migration.
+// SchemaLatestVersion returns the latest version available for migration for the storage provider.
 func (p *SQLProvider) SchemaLatestVersion() (version int, err error) {
 	return latestMigrationVersion(p.name)
 }
 
-// SchemaMigrationsUp returns a list of migrations up available between the current version and the provided version.
-func (p *SQLProvider) SchemaMigrationsUp(ctx context.Context, version int) (migrations []model.SchemaMigration, err error) {
-	current, err := p.SchemaVersion(ctx)
-	if err != nil {
-		return migrations, err
-	}
-
-	if version == 0 {
-		version = SchemaLatest
-	}
-
-	if current >= version {
-		return migrations, ErrNoAvailableMigrations
-	}
-
-	return loadMigrations(p.name, current, version)
-}
-
-// SchemaMigrationsDown returns a list of migrations down available between the current version and the provided version.
-func (p *SQLProvider) SchemaMigrationsDown(ctx context.Context, version int) (migrations []model.SchemaMigration, err error) {
-	current, err := p.SchemaVersion(ctx)
-	if err != nil {
-		return migrations, err
-	}
-
-	if current <= version {
-		return migrations, ErrNoAvailableMigrations
-	}
-
-	return loadMigrations(p.name, current, version)
-}
-
-// SchemaMigrationHistory returns migration history rows.
+// SchemaMigrationHistory returns the storage provider migration history rows.
 func (p *SQLProvider) SchemaMigrationHistory(ctx context.Context) (migrations []model.Migration, err error) {
 	rows, err := p.db.QueryxContext(ctx, p.sqlSelectMigrations)
 	if err != nil {
@@ -145,10 +148,44 @@ func (p *SQLProvider) SchemaMigrationHistory(ctx context.Context) (migrations []
 	return migrations, nil
 }
 
-// SchemaMigrate migrates from the current version to the provided version.
+// SchemaMigrationsUp returns a list of storage provider up migrations available between the current version
+// and the provided version.
+func (p *SQLProvider) SchemaMigrationsUp(ctx context.Context, version int) (migrations []model.SchemaMigration, err error) {
+	current, err := p.SchemaVersion(ctx)
+	if err != nil {
+		return migrations, err
+	}
+
+	if version == 0 {
+		version = SchemaLatest
+	}
+
+	if current >= version {
+		return migrations, ErrNoAvailableMigrations
+	}
+
+	return loadMigrations(p.name, current, version)
+}
+
+// SchemaMigrationsDown returns a list of storage provider down migrations available between the current version
+// and the provided version.
+func (p *SQLProvider) SchemaMigrationsDown(ctx context.Context, version int) (migrations []model.SchemaMigration, err error) {
+	current, err := p.SchemaVersion(ctx)
+	if err != nil {
+		return migrations, err
+	}
+
+	if current <= version {
+		return migrations, ErrNoAvailableMigrations
+	}
+
+	return loadMigrations(p.name, current, version)
+}
+
+// SchemaMigrate migrates from the storage provider's current schema version to the provided schema version.
 func (p *SQLProvider) SchemaMigrate(ctx context.Context, up bool, version int) (err error) {
 	var (
-		tx   *sqlx.Tx
+		tx   SQLXTx
 		conn SQLXConnection
 	)
 
@@ -221,7 +258,7 @@ func (p *SQLProvider) schemaMigrate(ctx context.Context, conn SQLXConnection, pr
 			}
 		}
 
-		if err = p.schemaMigrateApply(ctx, conn, migration); err != nil {
+		if err = p.schemaMigrateApply(ctx, conn, migration, prior, target); err != nil {
 			return p.schemaMigrateRollback(ctx, conn, prior, migration.After(), err)
 		}
 	}
@@ -243,22 +280,76 @@ func (p *SQLProvider) schemaMigrateLock(ctx context.Context, conn SQLXConnection
 	return nil
 }
 
-func (p *SQLProvider) schemaMigrateApply(ctx context.Context, conn SQLXConnection, migration model.SchemaMigration) (err error) {
+func (p *SQLProvider) schemaMigrateApply(ctx context.Context, conn SQLXConnection, migration model.SchemaMigration, prior, target int) (err error) {
 	if migration.NotEmpty() {
 		if _, err = conn.ExecContext(ctx, migration.Query); err != nil {
 			return fmt.Errorf(errFmtFailedMigration, migration.Version, migration.Name, err)
 		}
 
 		if migration.Version == 1 && migration.Up {
-			// Add the schema encryption value if upgrading to v1.
-			if err = p.setNewEncryptionCheckValue(ctx, conn, &p.key); err != nil {
+			key := p.keys.encryption
+
+			if target < schemaVersionEncryptionKeyDerivation {
+				key = utils.DeriveLegacyCryptographicKey([]byte(p.config.Storage.EncryptionKey))
+			}
+
+			if err = p.setNewEncryptionCheckValue(ctx, conn, key, aadForSchemaVersion(target)); err != nil {
 				return err
 			}
 		}
 	}
 
+	if p.name == providerMySQL {
+		var tx SQLXTx
+
+		if tx, err = p.db.BeginTxx(ctx, nil); err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+
+		if err = p.schemaMigrateApplySpecial(ctx, tx, migration, prior, target); err != nil {
+			_ = tx.Rollback()
+
+			return err
+		}
+
+		if err = tx.Commit(); err != nil {
+			if rerr := tx.Rollback(); rerr != nil {
+				return fmt.Errorf("failed to commit the transaction with: commit error: %w, rollback error: %+v", err, rerr)
+			}
+
+			return fmt.Errorf("failed to commit the transaction but it has been rolled back: commit error: %w", err)
+		}
+	} else if err = p.schemaMigrateApplySpecial(ctx, conn, migration, prior, target); err != nil {
+		return err
+	}
+
 	if err = p.schemaMigrateFinalize(ctx, conn, migration); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func (p *SQLProvider) schemaMigrateApplySpecial(ctx context.Context, conn SQLXConnection, migration model.SchemaMigration, prior, target int) (err error) {
+	var (
+		migrationsSpecial []fSchemaMigration
+		ok                bool
+	)
+
+	if migration.Up {
+		migrationsSpecial, ok = migrationsSpecialUp[migration.Version]
+	} else {
+		migrationsSpecial, ok = migrationsSpecialDown[migration.Version]
+	}
+
+	if !ok {
+		return nil
+	}
+
+	for _, special := range migrationsSpecial {
+		if err = special(ctx, conn, p, prior, migration.Before(), migration.After(), target); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -280,14 +371,14 @@ func (p *SQLProvider) schemaMigrateFinalize(ctx context.Context, conn SQLXConnec
 
 func (p *SQLProvider) schemaMigrateRollback(ctx context.Context, conn SQLXConnection, prior, after int, merr error) (err error) {
 	switch tx := conn.(type) {
-	case *sqlx.Tx:
+	case SQLXTx:
 		return p.schemaMigrateRollbackWithTx(ctx, tx, merr)
 	default:
 		return p.schemaMigrateRollbackWithoutTx(ctx, prior, after, merr)
 	}
 }
 
-func (p *SQLProvider) schemaMigrateRollbackWithTx(_ context.Context, tx *sqlx.Tx, merr error) (err error) {
+func (p *SQLProvider) schemaMigrateRollbackWithTx(_ context.Context, tx SQLXTx, merr error) (err error) {
 	if err = tx.Rollback(); err != nil {
 		return fmt.Errorf("error applying rollback %+v. rollback caused by: %w", err, merr)
 	}
@@ -302,7 +393,7 @@ func (p *SQLProvider) schemaMigrateRollbackWithoutTx(ctx context.Context, prior,
 	}
 
 	for _, migration := range migrations {
-		if err = p.schemaMigrateApply(ctx, p.db, migration); err != nil {
+		if err = p.schemaMigrateApply(ctx, p.db, migration, after, prior); err != nil {
 			return fmt.Errorf("error applying migration version %d to version %d for rollback: %+v. rollback caused by: %w", migration.Before(), migration.After(), err, merr)
 		}
 	}

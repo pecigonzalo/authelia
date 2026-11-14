@@ -1,6 +1,11 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package templates
 
 import (
+	"bytes"
 	"crypto/sha1" //nolint:gosec
 	"crypto/sha256"
 	"crypto/sha512"
@@ -14,74 +19,99 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+	"go.yaml.in/yaml/v4"
 )
 
 // FuncMap returns the template FuncMap commonly used in several templates.
 func FuncMap() map[string]any {
 	return map[string]any{
-		"iterate":     FuncIterate,
-		"fileContent": FuncFileContent,
-		"env":         FuncGetEnv,
-		"expandenv":   FuncExpandEnv,
-		"split":       FuncStringSplit,
-		"splitList":   FuncStringSplitList,
-		"join":        FuncElemsJoin,
-		"contains":    FuncStringContains,
-		"hasPrefix":   FuncStringHasPrefix,
-		"hasSuffix":   FuncStringHasSuffix,
-		"lower":       strings.ToLower,
-		"keys":        FuncKeys,
-		"sortAlpha":   FuncSortAlpha,
-		"upper":       strings.ToUpper,
-		"title":       strings.ToTitle,
-		"trim":        strings.TrimSpace,
-		"trimAll":     FuncStringTrimAll,
-		"trimSuffix":  FuncStringTrimSuffix,
-		"trimPrefix":  FuncStringTrimPrefix,
-		"replace":     FuncStringReplace,
-		"quote":       FuncStringQuote,
-		"sha1sum":     FuncHashSum(sha1.New),
-		"sha256sum":   FuncHashSum(sha256.New),
-		"sha512sum":   FuncHashSum(sha512.New),
-		"squote":      FuncStringSQuote,
-		"now":         time.Now,
-		"b64enc":      FuncB64Enc,
-		"b64dec":      FuncB64Dec,
-		"b32enc":      FuncB32Enc,
-		"b32dec":      FuncB32Dec,
-		"list":        FuncList,
-		"dict":        FuncDict,
-		"get":         FuncGet,
-		"set":         FuncSet,
-		"isAbs":       path.IsAbs,
-		"base":        path.Base,
-		"dir":         path.Dir,
-		"ext":         path.Ext,
-		"clean":       path.Clean,
-		"osBase":      filepath.Base,
-		"osClean":     filepath.Clean,
-		"osDir":       filepath.Dir,
-		"osExt":       filepath.Ext,
-		"osIsAbs":     filepath.IsAbs,
-		"deepEqual":   reflect.DeepEqual,
-		"typeOf":      FuncTypeOf,
-		"typeIs":      FuncTypeIs,
-		"typeIsLike":  FuncTypeIsLike,
-		"kindOf":      FuncKindOf,
-		"kindIs":      FuncKindIs,
-		"default":     FuncDefault,
-		"empty":       FuncEmpty,
-		"indent":      FuncIndent,
-		"nindent":     FuncNewlineIndent,
-		"uuidv4":      FuncUUIDv4,
-		"urlquery":    url.QueryEscape,
-		"urlunquery":  url.QueryUnescape,
+		"iterate":        FuncIterate,
+		"fileContent":    FuncFileContent,
+		"secret":         FuncSecret,
+		"env":            FuncGetEnv,
+		"mustEnv":        FuncMustGetEnv,
+		"expandenv":      FuncExpandEnv,
+		"split":          FuncStringSplit,
+		"splitList":      FuncStringSplitList,
+		"join":           FuncElemsJoin,
+		"contains":       FuncStringContains,
+		"hasPrefix":      FuncStringHasPrefix,
+		"hasSuffix":      FuncStringHasSuffix,
+		"lower":          strings.ToLower,
+		"keys":           FuncKeys,
+		"sortAlpha":      FuncSortAlpha,
+		"upper":          strings.ToUpper,
+		"title":          strings.ToTitle,
+		"trim":           strings.TrimSpace,
+		"trimAll":        FuncStringTrimAll,
+		"trimSuffix":     FuncStringTrimSuffix,
+		"trimPrefix":     FuncStringTrimPrefix,
+		"replace":        FuncStringReplace,
+		"quote":          FuncStringQuote,
+		"mquote":         FuncStringQuoteMultiLine(rune(34)),
+		"sha1sum":        FuncHashSum(sha1.New),
+		"sha256sum":      FuncHashSum(sha256.New),
+		"sha512sum":      FuncHashSum(sha512.New),
+		"squote":         FuncStringSQuote,
+		"msquote":        FuncStringQuoteMultiLine(rune(39)),
+		"now":            time.Now,
+		"ago":            FuncAgo,
+		"toDate":         FuncToDate,
+		"mustToDate":     FuncMustToDate,
+		"date":           FuncDate,
+		"dateInZone":     FuncDateInZone,
+		"htmlDate":       FuncHTMLDate,
+		"htmlDateInZone": FuncHTMLDateInZone,
+		"duration":       FuncDuration,
+		"unixEpoch":      FuncUnixEpoch,
+		"b64enc":         FuncB64Enc,
+		"b64dec":         FuncB64Dec,
+		"b32enc":         FuncB32Enc,
+		"b32dec":         FuncB32Dec,
+		"list":           FuncList,
+		"dict":           FuncDict,
+		"get":            FuncGet,
+		"set":            FuncSet,
+		"isAbs":          path.IsAbs,
+		"base":           path.Base,
+		"dir":            path.Dir,
+		"ext":            path.Ext,
+		"clean":          path.Clean,
+		"osBase":         filepath.Base,
+		"osClean":        filepath.Clean,
+		"osDir":          filepath.Dir,
+		"osExt":          filepath.Ext,
+		"osIsAbs":        filepath.IsAbs,
+		"deepEqual":      reflect.DeepEqual,
+		"typeOf":         FuncTypeOf,
+		"typeIs":         FuncTypeIs,
+		"typeIsLike":     FuncTypeIsLike,
+		"kindOf":         FuncKindOf,
+		"kindIs":         FuncKindIs,
+		"default":        FuncDefault,
+		"empty":          FuncEmpty,
+		"indent":         FuncIndent,
+		"nindent":        FuncNewlineIndent,
+		"mindent":        FuncMultilineIndent,
+		"uuidv4":         FuncUUIDv4,
+		"urlquery":       url.QueryEscape,
+		"urlunquery":     url.QueryUnescape,
+		"urlqueryarg":    FuncURLQueryArg,
+		"glob":           filepath.Glob,
+		"walk":           FuncWalk,
+
+		"fromYaml":     FuncFromYAML,
+		"toYaml":       FuncToYAML,
+		"toYamlPretty": FuncToYAMLPretty,
+		"toYamlCustom": FuncToYAMLCustom,
 	}
 }
 
@@ -115,28 +145,53 @@ func FuncB32Dec(input string) (string, error) {
 	return string(data), nil
 }
 
-// FuncExpandEnv is a special version of os.ExpandEnv that excludes secret keys.
+// FuncExpandEnv is a special version of [os.ExpandEnv] that excludes secret keys.
 func FuncExpandEnv(s string) string {
 	return os.Expand(s, FuncGetEnv)
 }
 
 // FuncGetEnv is a special version of os.GetEnv that excludes secret keys.
 func FuncGetEnv(key string) string {
+	if key == "$" {
+		return key
+	}
+
 	if isSecretEnvKey(key) {
 		return ""
 	}
 
-	return os.Getenv(key)
+	value, _ := syscall.Getenv(key)
+
+	return value
+}
+
+// FuncMustGetEnv is a special version of os.GetEnv that excludes secret keys and returns an error if it doesn't exist.
+func FuncMustGetEnv(key string) (string, error) {
+	if key == "$" {
+		return key, nil
+	}
+
+	value, found := syscall.Getenv(key)
+
+	if !found {
+		return "", fmt.Errorf("environment variable '%s' isn't set", key)
+	}
+
+	if isSecretEnvKey(key) {
+		return "", nil
+	}
+
+	return value, nil
 }
 
 // FuncHashSum is a helper function that provides similar functionality to helm sum funcs.
 func FuncHashSum(new func() hash.Hash) func(data string) string {
-	hasher := new()
-
 	return func(data string) string {
-		sum := hasher.Sum([]byte(data))
+		hasher := new()
 
-		return hex.EncodeToString(sum)
+		hasher.Write([]byte(data))
+
+		return hex.EncodeToString(hasher.Sum(nil))
 	}
 }
 
@@ -209,6 +264,19 @@ func FuncElemsJoin(sep string, elems any) string {
 	return strings.Join(strslice(elems), sep)
 }
 
+// FuncStringQuote is a helper function that provides similar functionality to the helm quote func.
+func FuncStringQuote(in ...any) string {
+	out := make([]string, 0, len(in))
+
+	for _, s := range in {
+		if s != nil {
+			out = append(out, fmt.Sprintf("%q", strval(s)))
+		}
+	}
+
+	return strings.Join(out, " ")
+}
+
 // FuncStringSQuote is a helper function that provides similar functionality to the helm squote func.
 func FuncStringSQuote(in ...any) string {
 	out := make([]string, 0, len(in))
@@ -222,17 +290,26 @@ func FuncStringSQuote(in ...any) string {
 	return strings.Join(out, " ")
 }
 
-// FuncStringQuote is a helper function that provides similar functionality to the helm quote func.
-func FuncStringQuote(in ...any) string {
-	out := make([]string, 0, len(in))
+// FuncStringQuoteMultiLine is a helper function that provides similar functionality
+// to FuncStringQuote and FuncStringSQuote, however it skips quoting if the string contains multiple lines.
+func FuncStringQuoteMultiLine(char rune) func(in ...any) string {
+	return func(in ...any) string {
+		out := make([]string, 0, len(in))
 
-	for _, s := range in {
-		if s != nil {
-			out = append(out, fmt.Sprintf("%q", strval(s)))
+		for _, s := range in {
+			if s != nil {
+				sv := strval(s)
+
+				if strings.Contains(sv, "\n") {
+					out = append(out, sv)
+				} else {
+					out = append(out, fmt.Sprintf("%c%s%c", char, sv, char))
+				}
+			}
 		}
-	}
 
-	return strings.Join(out, " ")
+		return strings.Join(out, " ")
+	}
 }
 
 // FuncIterate is a template function which takes a single uint returning a slice of units from 0 up to that number.
@@ -336,7 +413,7 @@ func FuncDict(pairs ...any) map[string]any {
 			continue
 		}
 
-		m[key] = pairs[i+1]
+		m[key] = pairs[i+1] //nolint:gosec // This can only panic on invalid inputs which all occur in templating.
 	}
 
 	return m
@@ -406,6 +483,17 @@ func FuncNewlineIndent(indent int, value string) string {
 	return "\n" + FuncIndent(indent, value)
 }
 
+// FuncMultilineIndent is a helper function that performs YAML multiline intending with a multiline format input such as
+// |, |+, |-, >, >+, >-, etc. This is only true if the value has newline characters otherwise it just returns the same
+// output as the indent function.
+func FuncMultilineIndent(indent int, multiline, value string) string {
+	if !strings.Contains(value, "\n") {
+		return value
+	}
+
+	return multiline + "\n" + FuncIndent(indent, value)
+}
+
 // FuncUUIDv4 is a helper function that provides similar functionality to the helm uuidv4 func.
 func FuncUUIDv4() string {
 	return uuid.New().String()
@@ -420,4 +508,187 @@ func FuncFileContent(path string) (data string, err error) {
 	}
 
 	return string(raw), nil
+}
+
+// FuncSecret returns the file content stripping the newlines from the end of the content.
+func FuncSecret(path string) (data string, err error) {
+	if data, err = FuncFileContent(path); err != nil {
+		return "", err
+	}
+
+	return strings.TrimRight(data, "\n"), nil
+}
+
+// WalkInfo represents a single result from the FuncWalk helper function.
+type WalkInfo struct {
+	Path         string
+	AbsolutePath string
+
+	os.FileInfo
+}
+
+// FuncWalk is a helper function that walks the root path returning the entries which match the given pattern.
+func FuncWalk(root, pattern string, skipDir bool) (infos []WalkInfo, err error) {
+	if root == "" {
+		return nil, fmt.Errorf("error occurred performing walk: root path cannot be empty")
+	}
+
+	var rePattern *regexp.Regexp
+
+	infos = []WalkInfo{}
+
+	if pattern != "" {
+		if rePattern, err = regexp.Compile(pattern); err != nil {
+			return nil, fmt.Errorf("error occurred compiling walk pattern: %w", err)
+		}
+	}
+
+	if err = filepath.Walk(root, func(name string, info os.FileInfo, walkErr error) (err error) {
+		if walkErr != nil {
+			return fmt.Errorf("error occurred walking directory: %w", walkErr)
+		}
+
+		walkinfo := WalkInfo{
+			Path:     name,
+			FileInfo: info,
+		}
+
+		if skipDir && walkinfo.IsDir() {
+			return nil
+		}
+
+		if walkinfo.AbsolutePath, err = filepath.Abs(walkinfo.Path); err != nil {
+			return err
+		}
+
+		if rePattern != nil && !rePattern.MatchString(walkinfo.AbsolutePath) {
+			return nil
+		}
+
+		infos = append(infos, walkinfo)
+
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return infos, nil
+}
+
+// FuncFromYAML is a helper function that provides similar functionality to the helm fromYaml func.
+func FuncFromYAML(yml string) (object map[string]any, err error) {
+	object = map[string]any{}
+
+	if err = yaml.Unmarshal([]byte(yml), &object); err != nil {
+		return nil, err
+	}
+
+	return object, nil
+}
+
+// FuncToYAML is a helper function that provides similar functionality to the helm toYaml func.
+func FuncToYAML(object any) (yml string, err error) {
+	return FuncToYAMLCustom(object, -1)
+}
+
+// FuncToYAMLPretty is a helper function that provides similar functionality to the helm toYamlPretty func.
+func FuncToYAMLPretty(object any) (yml string, err error) {
+	return FuncToYAMLCustom(object, 2)
+}
+
+// FuncToYAMLCustom is a helper function that provides similar functionality to the helm toYaml func with a custom indent.
+func FuncToYAMLCustom(object any, indent int) (yml string, err error) {
+	var data bytes.Buffer
+
+	encoder := yaml.NewEncoder(&data)
+
+	if indent >= 0 {
+		encoder.SetIndent(indent)
+	}
+
+	if err = encoder.Encode(object); err != nil {
+		return "", err
+	}
+
+	return strings.TrimSuffix(data.String(), "\n"), nil
+}
+
+// FuncAgo is a helper function that provides similar functionality to the helm ago func.
+func FuncAgo(date any) string {
+	return time.Since(convertAnyToTime(date)).Round(time.Second).String()
+}
+
+// FuncDate is a helper function that provides similar functionality to the helm date func.
+func FuncDate(format string, date any) string {
+	return formatTimeWithLocation(format, convertAnyToTime(date), time.Local)
+}
+
+// FuncDateInZone is a helper function that provides similar functionality to the helm dateInZone func.
+func FuncDateInZone(format string, date any, zone string) string {
+	var (
+		location *time.Location
+		err      error
+	)
+	if location, err = time.LoadLocation(zone); err != nil {
+		location = time.UTC
+	}
+
+	return formatTimeWithLocation(format, convertAnyToTime(date), location)
+}
+
+// FuncHTMLDate is a helper function that provides similar functionality to the helm htmlDate func.
+func FuncHTMLDate(date any) string {
+	return formatHTMLTimeWithLocation(convertAnyToTime(date), time.Local)
+}
+
+// FuncHTMLDateInZone is a helper function that provides similar functionality to the helm htmlDateInZone func.
+func FuncHTMLDateInZone(date any, zone string) string {
+	return FuncDateInZone(time.DateOnly, date, zone)
+}
+
+// FuncDuration is a helper function that provides similar functionality to the helm duration func.
+func FuncDuration(sec any) string {
+	var n int64
+
+	switch v := sec.(type) {
+	case string:
+		n, _ = strconv.ParseInt(v, 10, 64)
+	case int:
+		n = int64(v)
+	case int32:
+		n = int64(v)
+	case int64:
+		n = v
+	default:
+		n = 0
+	}
+
+	return (time.Duration(n) * time.Second).String()
+}
+
+// FuncToDate is a helper function that provides similar functionality to the helm toDate func.
+func FuncToDate(format, date string) time.Time {
+	t, _ := time.ParseInLocation(format, date, time.Local)
+
+	return t
+}
+
+// FuncMustToDate is a helper function that provides similar functionality to the helm mustToDate func.
+func FuncMustToDate(format, date string) (time.Time, error) {
+	return time.ParseInLocation(format, date, time.Local)
+}
+
+// FuncUnixEpoch is a helper function that provides similar functionality to the helm unixEpoch func.
+func FuncUnixEpoch(date time.Time) string {
+	return strconv.FormatInt(date.Unix(), 10)
+}
+
+// FuncURLQueryArg is a helper function that returns the value of a query argument from the given URI.
+func FuncURLQueryArg(raw, key string) (value string, err error) {
+	uri, err := url.ParseRequestURI(raw)
+	if err != nil {
+		return "", err
+	}
+
+	return uri.Query().Get(key), nil
 }

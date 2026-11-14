@@ -1,7 +1,10 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -9,16 +12,16 @@ var networkACLSuiteName = "NetworkACL"
 
 func init() {
 	dockerEnvironment := NewDockerEnvironment([]string{
-		"internal/suites/docker-compose.yml",
-		"internal/suites/NetworkACL/docker-compose.yml",
-		"internal/suites/example/compose/authelia/docker-compose.backend.{}.yml",
-		"internal/suites/example/compose/authelia/docker-compose.frontend.{}.yml",
-		"internal/suites/example/compose/nginx/backend/docker-compose.yml",
-		"internal/suites/example/compose/nginx/portal/docker-compose.yml",
-		"internal/suites/example/compose/squid/docker-compose.yml",
-		"internal/suites/example/compose/smtp/docker-compose.yml",
+		"internal/suites/compose.yml",
+		"internal/suites/NetworkACL/compose.yml",
+		"internal/suites/example/compose/authelia/compose.backend.{}.yml",
+		"internal/suites/example/compose/authelia/compose.frontend.{}.yml",
+		"internal/suites/example/compose/nginx/backend/compose.yml",
+		"internal/suites/example/compose/nginx/portal/compose.yml",
+		"internal/suites/example/compose/squid/compose.yml",
+		"internal/suites/example/compose/smtp/compose.yml",
 		// To debug headers.
-		"internal/suites/example/compose/httpbin/docker-compose.yml",
+		"internal/suites/example/compose/httpbin/compose.yml",
 	})
 
 	setup := func(suitePath string) (err error) {
@@ -30,25 +33,11 @@ func init() {
 			return err
 		}
 
-		return updateDevEnvFileForDomain(BaseDomain, true)
+		return updateDevEnvFileForDomain(BaseDomain, dockerEnvironment)
 	}
 
 	displayAutheliaLogs := func() error {
-		backendLogs, err := dockerEnvironment.Logs("authelia-backend", nil)
-		if err != nil {
-			return err
-		}
-
-		fmt.Println(backendLogs)
-
-		frontendLogs, err := dockerEnvironment.Logs("authelia-frontend", nil)
-		if err != nil {
-			return err
-		}
-
-		fmt.Println(frontendLogs)
-
-		return nil
+		return dockerEnvironment.PrintLogs("authelia-backend", "authelia-frontend", "client-1", "client-2")
 	}
 
 	teardown := func(suitePath string) error {
@@ -57,12 +46,12 @@ func init() {
 
 	GlobalRegistry.Register(networkACLSuiteName, Suite{
 		SetUp:           setup,
-		SetUpTimeout:    5 * time.Minute,
+		SetUpTimeout:    2 * time.Minute,
 		OnSetupTimeout:  displayAutheliaLogs,
 		OnError:         displayAutheliaLogs,
 		TestTimeout:     1 * time.Minute,
 		TearDown:        teardown,
-		TearDownTimeout: 2 * time.Minute,
+		TearDownTimeout: 1 * time.Minute,
 		Description: `This suite has been created to test Authelia with basic feature in a non highly-available setup.
 Authelia basically use an in-memory cache to store user sessions and persist data on disk instead
 of using a remote database. Also, the user accounts are stored in file-based database.`,

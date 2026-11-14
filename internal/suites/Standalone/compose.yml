@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+---
+services:
+  authelia-backend:
+    environment:
+      AUTHELIA_JWT_SECRET_FILE: '/tmp/authelia/StandaloneSuite/jwt'
+      AUTHELIA_SESSION_SECRET_FILE: '/tmp/authelia/StandaloneSuite/session'
+    volumes:
+      - './Standalone/configuration.yml:/config/configuration.yml'
+      - './Standalone/users.yml:/config/users.yml'
+      - './common/pki:/pki'
+      - './common/pki/public.crt:/certs/public.crt'
+      - '${SUITE_TMP:-/tmp}:/tmp'
+      - './Standalone/locales:/config/locales'
+    user: '${USER_ID}:${GROUP_ID}'
+...

@@ -1,29 +1,40 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package configuration
 
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/sirupsen/logrus"
+	"go.yaml.in/yaml/v4"
 
 	"github.com/authelia/authelia/v4/internal/logging"
 	"github.com/authelia/authelia/v4/internal/templates"
+	"github.com/authelia/authelia/v4/internal/utils"
 )
 
 // FilteredFile implements a koanf.Provider.
 type FilteredFile struct {
+	data    []byte
 	path    string
-	filters []FileFilter
+	filters []BytesFilter
 }
 
 // FilteredFileProvider returns a koanf.Provider which provides filtered file output.
-func FilteredFileProvider(path string, filters ...FileFilter) *FilteredFile {
+func FilteredFileProvider(path string, filters ...BytesFilter) *FilteredFile {
 	return &FilteredFile{
 		path:    filepath.Clean(path),
 		filters: filters,
@@ -32,109 +43,346 @@ func FilteredFileProvider(path string, filters ...FileFilter) *FilteredFile {
 
 // ReadBytes reads the contents of a file on disk, passes it through any configured filters, and returns the bytes.
 func (f *FilteredFile) ReadBytes() (data []byte, err error) {
-	if data, err = os.ReadFile(f.path); err != nil {
+	if f.data != nil {
+		return f.data, nil
+	}
+
+	if f.data, err = os.ReadFile(f.path); err != nil {
 		return nil, err
 	}
 
-	if len(data) == 0 || len(f.filters) == 0 {
-		return data, nil
+	if len(f.data) == 0 || len(f.filters) == 0 {
+		return f.data, nil
 	}
 
 	for _, filter := range f.filters {
-		if data, err = filter(data); err != nil {
+		if f.data, err = filter.Filter(f.data); err != nil {
 			return nil, err
 		}
 	}
 
-	return data, nil
+	return f.data, nil
 }
 
 // Read is not supported by the filtered file koanf.Provider.
-func (f *FilteredFile) Read() (map[string]interface{}, error) {
+func (f *FilteredFile) Read() (map[string]any, error) {
 	return nil, errors.New("filtered file provider does not support this method")
 }
 
-// FileFilter describes a func used to filter files.
-type FileFilter func(in []byte) (out []byte, err error)
+// BytesFilter is an interface describing utility structures that filter bytes into desired bytes.
+type BytesFilter interface {
+	Name() (name string)
+	Filter(in []byte) (out []byte, err error)
+}
 
-// NewFileFiltersDefault returns the default list of FileFilter.
-func NewFileFiltersDefault() []FileFilter {
-	return []FileFilter{
-		NewTemplateFileFilter(),
-		NewExpandEnvFileFilter(),
+// TemplateBytesFilterValues holds the values provided to the template filter.
+type TemplateBytesFilterValues struct {
+	Values   map[string]any
+	Authelia map[string]any
+}
+
+// TemplateBytesFilter is a BytesFilter which executes the content as a Go template.
+type TemplateBytesFilter struct {
+	t    *template.Template
+	log  *logrus.Entry
+	data TemplateBytesFilterValues
+}
+
+// Name returns the name of this filter.
+func (f *TemplateBytesFilter) Name() (name string) {
+	return filterTemplate
+}
+
+// Filter executes the given content as a Go template.
+func (f *TemplateBytesFilter) Filter(in []byte) (out []byte, err error) {
+	var t *template.Template
+
+	if t, err = f.t.Parse(string(in)); err != nil {
+		return nil, err
+	}
+
+	f.t = t
+
+	buf := &bytes.Buffer{}
+
+	if err = f.t.Execute(buf, f.data); err != nil {
+		return nil, err
+	}
+
+	out = buf.Bytes()
+
+	if f.log.Level >= logrus.TraceLevel {
+		f.log.
+			WithField("content", base64.RawStdEncoding.EncodeToString(out)).
+			Trace("Templated File Filter completed successfully")
+	}
+
+	return out, nil
+}
+
+// NewFileFiltersDefault returns the default list of BytesFilter.
+func NewFileFiltersDefault() []BytesFilter {
+	return []BytesFilter{
+		NewTemplateFileFilter(nil, "", ""),
 	}
 }
 
-// NewFileFilters returns a list of FileFilter provided they are valid.
-func NewFileFilters(names []string) (filters []FileFilter, err error) {
-	filters = make([]FileFilter, len(names))
+// NewFileFilters returns a list of BytesFilter provided they are valid. Each path in valuesFiles is loaded in order and
+// deep-merged over the previously-loaded values so that later files override earlier ones. The values files are only
+// loaded if one of the named filters utilizes them, otherwise a warning is logged and they're ignored. Errors which
+// occur loading the values files are wrapped in a *FilterValuesError. The left and right values are forwarded to
+// NewTemplateFileFilter when the template filter is present; empty values use the defaults ({{ and }}).
+func NewFileFilters(valuesFiles []string, left, right string, names ...string) (filters []BytesFilter, err error) {
+	filters = make([]BytesFilter, len(names))
+
+	var (
+		requiresValues bool
+		values         map[string]any
+	)
 
 	filterMap := map[string]int{}
+	filterNames := make([]string, len(names))
 
 	for i, name := range names {
 		name = strings.ToLower(name)
 
 		switch name {
-		case "template":
-			filters[i] = NewTemplateFileFilter()
-		case "expand-env":
-			filters[i] = NewExpandEnvFileFilter()
+		case filterTemplate:
+			requiresValues = true
+		case filterRemovedExpandEnv:
+			return nil, fmt.Errorf("filter named '%s' has been removed, the '%s' filter should be used instead", filterRemovedExpandEnv, filterTemplate)
 		default:
 			return nil, fmt.Errorf("invalid filter named '%s'", name)
 		}
 
 		if _, ok := filterMap[name]; ok {
 			return nil, fmt.Errorf("duplicate filter named '%s'", name)
-		} else {
-			filterMap[name] = 1
+		}
+
+		filterMap[name] = 1
+		filterNames[i] = name
+	}
+
+	switch {
+	case requiresValues:
+		if values, err = loadValuesFiles(valuesFiles); err != nil {
+			return nil, &FilterValuesError{err: err}
+		}
+	case len(valuesFiles) != 0:
+		logging.Logger().
+			WithField("files", valuesFiles).
+			Warnf("Configuration filter values files have been configured but none of the configured filters utilize them, the values files will be ignored: the '%s' filter must be enabled to utilize values files", filterTemplate)
+	}
+
+	for i, name := range filterNames {
+		if name == filterTemplate {
+			filters[i] = NewTemplateFileFilter(values, left, right)
 		}
 	}
 
 	return filters, nil
 }
 
-// NewExpandEnvFileFilter is a FileFilter which passes the bytes through os.ExpandEnv.
-func NewExpandEnvFileFilter() FileFilter {
-	log := logging.Logger()
+// FilterValuesError is an error which occurred while loading the values files for the configuration file filters. It
+// exists to allow callers to distinguish these errors from errors with the filters themselves.
+type FilterValuesError struct {
+	err error
+}
 
-	return func(in []byte) (out []byte, err error) {
-		out = []byte(os.ExpandEnv(string(in)))
+// Error returns the error string of the underlying error.
+func (e *FilterValuesError) Error() string {
+	return e.err.Error()
+}
 
-		if log.Level >= logrus.TraceLevel {
-			log.
-				WithField("content", base64.RawStdEncoding.EncodeToString(out)).
-				Trace("Expanded Env File Filter completed successfully")
+// Unwrap returns the underlying error.
+func (e *FilterValuesError) Unwrap() error {
+	return e.err
+}
+
+func loadValuesFiles(paths []string) (values map[string]any, err error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+
+	values = map[string]any{}
+
+	for _, path := range paths {
+		var loaded map[string]any
+
+		if loaded, err = loadValuesFile(path); err != nil {
+			return nil, err
 		}
 
-		return out, nil
+		mergeValues(values, loaded)
+	}
+
+	return values, nil
+}
+
+func loadValuesFile(path string) (values map[string]any, err error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	var data []byte
+
+	if data, err = os.ReadFile(path); err != nil {
+		return nil, fmt.Errorf("error reading values file: %w", err)
+	}
+
+	var raw any
+
+	ext := filepath.Ext(path)
+
+	switch ext {
+	case utils.ExtYML, utils.ExtYAML:
+		err = yaml.Unmarshal(data, &raw)
+	case utils.ExtJSON:
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.UseNumber()
+
+		if err = decoder.Decode(&raw); err == nil {
+			if _, terr := decoder.Token(); !errors.Is(terr, io.EOF) {
+				err = errors.New("invalid data after top-level value")
+			}
+		}
+
+		if m, ok := raw.(map[string]any); ok {
+			delete(m, "$schema")
+		}
+	case utils.ExtTOML:
+		err = toml.Unmarshal(data, &raw)
+	default:
+		return nil, fmt.Errorf("error parsing values file '%s': unsupported extension '%s': must be one of '.yml', '.yaml', '.json', or '.toml'", path, ext)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("error parsing values file '%s': %w", path, err)
+	}
+
+	if raw, err = normalizeValues(raw); err != nil {
+		return nil, fmt.Errorf("error parsing values file '%s': %w", path, err)
+	}
+
+	switch v := raw.(type) {
+	case nil:
+		return map[string]any{}, nil
+	case map[string]any:
+		return v, nil
+	default:
+		return nil, fmt.Errorf("error parsing values file '%s': the top-level value must be a mapping but it's a %T", path, raw)
 	}
 }
 
-// NewTemplateFileFilter is a FileFilter which passes the bytes through text/template.
-func NewTemplateFileFilter() FileFilter {
-	t := template.New("config.template").Funcs(templates.FuncMap())
-
-	log := logging.Logger()
-
-	return func(in []byte) (out []byte, err error) {
-		if t, err = t.Parse(string(in)); err != nil {
-			return nil, err
+func normalizeValues(value any) (normalized any, err error) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, item := range v {
+			if v[key], err = normalizeValues(item); err != nil {
+				return nil, err
+			}
 		}
 
-		buf := &bytes.Buffer{}
+		return v, nil
+	case map[any]any:
+		values := make(map[string]any, len(v))
 
-		if err = t.Execute(buf, nil); err != nil {
-			return nil, err
+		for key, item := range v {
+			k := "null"
+
+			if key != nil {
+				k = fmt.Sprint(key)
+			}
+
+			if _, ok := values[k]; ok {
+				return nil, fmt.Errorf("duplicate key '%s' after normalizing keys to strings", k)
+			}
+
+			if values[k], err = normalizeValues(item); err != nil {
+				return nil, err
+			}
 		}
 
-		out = buf.Bytes()
-
-		if log.Level >= logrus.TraceLevel {
-			log.
-				WithField("content", base64.RawStdEncoding.EncodeToString(out)).
-				Trace("Templated File Filter completed successfully")
+		return values, nil
+	case []any:
+		for i, item := range v {
+			if v[i], err = normalizeValues(item); err != nil {
+				return nil, err
+			}
 		}
 
-		return out, nil
+		return v, nil
+	case json.Number:
+		return normalizeJSONNumber(v)
+	default:
+		return value, nil
+	}
+}
+
+func normalizeJSONNumber(v json.Number) (normalized any, err error) {
+	if i, ierr := v.Int64(); ierr == nil {
+		return i, nil
+	}
+
+	if strings.ContainsAny(v.String(), ".eE") {
+		return v.Float64()
+	}
+
+	if u, uerr := strconv.ParseUint(v.String(), 10, 64); uerr == nil {
+		return u, nil
+	}
+
+	return nil, fmt.Errorf("integer '%s' is out of range", v)
+}
+
+func mergeValues(dst, src map[string]any) {
+	for k, sv := range src {
+		dv, ok := dst[k]
+		if !ok {
+			dst[k] = sv
+
+			continue
+		}
+
+		dmap, dok := dv.(map[string]any)
+		smap, sok := sv.(map[string]any)
+
+		if dok && sok {
+			mergeValues(dmap, smap)
+
+			continue
+		}
+
+		dst[k] = sv
+	}
+}
+
+// NewTemplateFileFilter returns a new BytesFilter which passes the bytes through text/template. An empty value for
+// left or right uses the default delimiter ({{ or }} respectively).
+func NewTemplateFileFilter(values map[string]any, left, right string) BytesFilter {
+	data := TemplateBytesFilterValues{
+		Values:   values,
+		Authelia: map[string]any{},
+	}
+
+	if data.Values == nil {
+		data.Values = map[string]any{}
+	}
+
+	data.Authelia["Version"] = utils.Version()
+	data.Authelia["Build"] = map[string]any{
+		"Tag":    utils.BuildTag,
+		"State":  utils.BuildState,
+		"Extra":  utils.BuildExtra,
+		"Date":   utils.BuildDate,
+		"Commit": utils.BuildCommit,
+		"Branch": utils.BuildBranch,
+		"Number": utils.BuildNumber,
+	}
+
+	return &TemplateBytesFilter{
+		log:  logging.Logger().WithFields(map[string]any{filterField: filterTemplate}),
+		t:    template.New("config.template").Delims(left, right).Option("missingkey=error").Funcs(templates.FuncMap()),
+		data: data,
 	}
 }

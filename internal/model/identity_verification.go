@@ -1,20 +1,25 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package model
 
 import (
 	"database/sql"
 	"net"
+	"net/url"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
 
 // NewIdentityVerification creates a new IdentityVerification from a given username and action.
-func NewIdentityVerification(jti uuid.UUID, username, action string, ip net.IP) (verification IdentityVerification) {
+func NewIdentityVerification(jti uuid.UUID, username, action string, ip net.IP, expiration time.Duration) (verification IdentityVerification) {
 	return IdentityVerification{
 		JTI:       jti,
 		IssuedAt:  time.Now(),
-		ExpiresAt: time.Now().Add(5 * time.Minute),
+		ExpiresAt: time.Now().Add(expiration),
 		Action:    action,
 		Username:  username,
 		IssuedIP:  NewIP(ip),
@@ -30,16 +35,18 @@ type IdentityVerification struct {
 	ExpiresAt  time.Time    `db:"exp"`
 	Action     string       `db:"action"`
 	Username   string       `db:"username"`
-	Consumed   sql.NullTime `db:"consumed"`
+	ConsumedAt sql.NullTime `db:"consumed"`
 	ConsumedIP NullIP       `db:"consumed_ip"`
+	RevokedAt  sql.NullTime `db:"revoked"`
+	RevokedIP  NullIP       `db:"revoked_ip"`
 }
 
 // ToIdentityVerificationClaim converts the IdentityVerification into a IdentityVerificationClaim.
-func (v IdentityVerification) ToIdentityVerificationClaim() (claim *IdentityVerificationClaim) {
+func (v IdentityVerification) ToIdentityVerificationClaim(issuer *url.URL) (claim *IdentityVerificationClaim) {
 	return &IdentityVerificationClaim{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        v.JTI.String(),
-			Issuer:    "Authelia",
+			Issuer:    issuer.String(),
 			IssuedAt:  jwt.NewNumericDate(v.IssuedAt),
 			ExpiresAt: jwt.NewNumericDate(v.ExpiresAt),
 		},
@@ -66,10 +73,19 @@ func (v IdentityVerificationClaim) ToIdentityVerification() (verification *Ident
 		return nil, err
 	}
 
-	return &IdentityVerification{
-		JTI:       jti,
-		Username:  v.Username,
-		Action:    v.Action,
-		ExpiresAt: v.ExpiresAt.Time,
-	}, nil
+	verification = &IdentityVerification{
+		JTI:      jti,
+		Username: v.Username,
+		Action:   v.Action,
+	}
+
+	if v.IssuedAt != nil {
+		verification.IssuedAt = v.IssuedAt.Time
+	}
+
+	if v.ExpiresAt != nil {
+		verification.ExpiresAt = v.ExpiresAt.Time
+	}
+
+	return verification, nil
 }

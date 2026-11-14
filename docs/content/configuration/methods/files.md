@@ -1,0 +1,432 @@
+---
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+title: "Files"
+description: "Configuring Authelia using YAML, TOML, or JSON configuration files including file discovery, loading behavior, multiple file support, template filters, and search path rules."
+summary: "Authelia can be configured via files. This section describes utilizing this method."
+date: 2024-03-14T06:00:14+11:00
+draft: false
+images: []
+weight: 101200
+toc: true
+seo:
+  title: "" # custom title (optional)
+  description: "" # custom description (recommended)
+  canonical: "" # custom canonical URL (optional)
+  noindex: false # false (default) or true
+---
+
+## Loading behavior and Discovery
+
+There are several options which affect the loading of files:
+
+|                 Name                  |         Argument          |        Environment Variable        |                                           Description                                            |
+| :-----------------------------------: | :-----------------------: | :--------------------------------: | :----------------------------------------------------------------------------------------------: |
+|          Configuration Paths          |     `--config`, `-c`      |        `X_AUTHELIA_CONFIG`         |        A list of file or directory (non-recursive) paths to load configuration files from        |
+|         Configuration Reload          |            N/A            |     `X_AUTHELIA_CONFIG_RELOAD`     |        Enables reloading Authelia on the modification of one of the defined config paths         |
+| Configuration Reload Additional Paths |            N/A            |  `X_AUTHELIA_CONFIG_RELOAD_PATHS`  |           A list of additional paths to the watcher which are not configuration paths            |
+|       [Filters](#file-filters)        |    `--config.filters`     |    `X_AUTHELIA_CONFIG_FILTERS`     |          A list of filters applied to every file from the Files or Directories options           |
+|   [Filters](#file-filters) (Values)   | `--config.filters.values` | `X_AUTHELIA_CONFIG_FILTERS_VALUES` | The path or paths to YAML/TOML/JSON files which contain values to be interpreted by some filters |
+
+### Configuration Paths
+
+{{< callout context="note" title="Note" icon="outline/info-circle" >}}
+When specifying directories and files, the individual files specified **_must not_** be within any of the directories
+specified.
+{{< /callout >}}
+
+{{< callout context="caution" title="Important Note" icon="outline/alert-triangle" >}}
+If any directory is specified all files in that directory (non-recursive) should be considered part of the effective
+Authelia configuration regardless if they handled by a specific configuration parser or not. Storing files not loaded
+by Authelia in this directory **_is not supported_** and should it cause an error in the future this
+**_is expected behavior_**. This allows us to add additional file parsers in the future as well as configuration logic.
+{{< /callout >}}
+
+Configuration options can be discovered via either the Argument or Environment Variable, but not both at the same time.
+If both are specified the Argument takes precedence and the Environment Variable is ignored. It is generally recommended
+that if you're using a container that you use the Environment Variable as this will allow you to execute other commands
+from the context of the container more easily.
+
+### Configuration Reload
+
+{{< callout context="caution" title="Important Note" icon="outline/alert-triangle" >}}
+If the configuration reload fails to validate the configuration or a provider fails to initialize this will cause an
+intentional crash of Authelia. This is expected behavior and will not be changed. Users are expected to validate their
+configuration before writing the changes to disk.
+
+Changing a path that used to be a file into a directory is also not supported. Performing this action could result in
+unexpected and undesirable behavior.
+{{< /callout >}}
+
+In the instance of a file system notify event being observed that is a file path defined in the
+[Configuration Paths](#configuration-paths), this will trigger a reload.
+
+In the instance of a file system change being
+observed that is a file within a directory path defined in the [Configuration Paths](#configuration-paths) this will
+also cause a reload, regardless if the file is effectively a configuration file or not.
+
+In both instances a reload is only triggered by `Create`, `Remove`, `Rename`, or `Write` file system notify events.
+`Chmod` events do not trigger a reload.
+
+In addition to the configuration paths you can define additional paths which will cause a reload with the
+`X_AUTHELIA_CONFIG_RELOAD_PATHS` environment variable. These paths are not included in the configuration, and this makes
+this option useful for folders that include secrets. This value is a comma separated list of paths which can either be
+a file or a directory.
+
+A reload can also be triggered manually at any time, regardless of whether the `X_AUTHELIA_CONFIG_RELOAD` environment
+variable is enabled, by sending the `SIGHUP` signal to the Authelia process.
+
+{{< callout context="caution" title="Important Note" icon="outline/alert-triangle" >}}
+Prior to v4.40.0 the `SIGHUP` signal caused the log file to be reopened. This behavior has moved to the `SIGUSR1`
+signal, and log rotation configurations which send `SIGHUP` must be updated accordingly.
+{{< /callout >}}
+
+## Formats
+
+The supported configuration file formats are [YAML](#yaml), [TOML](#toml), and [JSON](#json). The format of each file
+is determined by its extension:
+
+|    Format     |   Extensions    |
+| :-----------: | :-------------: |
+| [YAML](#yaml) | `.yml`, `.yaml` |
+| [TOML](#toml) |     `.toml`     |
+| [JSON](#json) |     `.json`     |
+
+Files with any other extension are parsed as [YAML](#yaml) for backwards compatibility when they are explicitly
+specified, and are skipped entirely when they are discovered within a directory.
+
+Formats can be freely mixed. Multiple configuration files of differing formats are merged exactly the same way as
+multiple files of the same format, see [Multiple Configuration Files](#multiple-configuration-files).
+
+It's important that you sufficiently validate your configuration file. While we produce console errors for users in many
+misconfiguration scenarios it's not perfect. Each file type has recommended methods for validation.
+
+### YAML
+
+_Authelia_ loads `configuration.yml` as the configuration if you just run it. You can override this behavior with the
+following syntax:
+
+{{< envTabs "Validate Configuration" >}}
+{{< envTab "Docker" >}}
+
+```bash
+docker run authelia/authelia:latest authelia --config config.custom.yml
+```
+
+{{< /envTab >}}
+{{< envTab "Bare-Metal" >}}
+
+```bash
+authelia --config config.custom.yml
+```
+
+{{< /envTab >}}
+{{< /envTabs >}}
+
+#### YAML Validation
+
+We recommend utilizing [VSCodium](https://vscodium.com/) or [VSCode](https://code.visualstudio.com/), both with the
+[YAML Extension](https://open-vsx.org/extension/redhat/vscode-yaml) by RedHat to validate this file type.
+
+This extension allows validation of the format and schema of a YAML file. To facilitate schema validation we publish
+a set of JSON schemas which you can include as a special comment in order to validate the YAML file further. See the
+[JSON Schema reference guide](../../reference/guides/schemas.md#json-schema) for more information including instructions
+on how to utilize the schemas.
+
+### TOML
+
+_Authelia_ loads a configuration file with the `.toml` extension using the [TOML](https://toml.io/) parser. For example:
+
+{{< envTabs "Run With TOML Configuration" >}}
+{{< envTab "Docker" >}}
+
+```bash
+docker run authelia/authelia:latest authelia --config configuration.toml
+```
+
+{{< /envTab >}}
+{{< envTab "Bare-Metal" >}}
+
+```bash
+authelia --config configuration.toml
+```
+
+{{< /envTab >}}
+{{< /envTabs >}}
+
+### JSON
+
+_Authelia_ loads a configuration file with the `.json` extension using the JSON parser. For example:
+
+{{< envTabs "Run With JSON Configuration" >}}
+{{< envTab "Docker" >}}
+
+```bash
+docker run authelia/authelia:latest authelia --config configuration.json
+```
+
+{{< /envTab >}}
+{{< envTab "Bare-Metal" >}}
+
+```bash
+authelia --config configuration.json
+```
+
+{{< /envTab >}}
+{{< /envTabs >}}
+
+#### JSON Validation
+
+The [JSON schemas](../../reference/guides/schemas.md#json-schema) we publish can be referenced directly from a JSON
+configuration file via the `$schema` property, which most editors will use to validate the file as you edit it.
+
+## Multiple Configuration Files
+
+You can have multiple configuration files which will be merged in the order specified. If duplicate keys are specified
+the last one to be specified is the one that takes precedence. Example:
+
+{{< envTabs "Run With Multiple Configurations" >}}
+{{< envTab "Docker" >}}
+
+```bash
+docker run -d authelia/authelia:latest authelia --config configuration.yml --config config-acl.yml --config config-other.yml
+```
+
+```bash
+docker run -d authelia/authelia:latest authelia --config configuration.yml,config-acl.yml,config-other.yml
+```
+
+{{< /envTab >}}
+{{< envTab "Bare-Metal" >}}
+
+```bash
+authelia --config configuration.yml --config config-acl.yml --config config-other.yml
+```
+
+```bash
+authelia --config configuration.yml,config-acl.yml,config-other.yml
+```
+
+{{< /envTab >}}
+{{< /envTabs >}}
+
+A template with all possible options can be found at the root of the repository
+{{< github-link name="here" path="config.template.yml" >}}.
+
+{{< callout context="caution" title="Important Note" icon="outline/alert-triangle" >}}
+You should not have configuration sections such as Access Control Rules or OpenID Connect 1.0
+clients configured in multiple files. If you wish to split these into their own files that is fine, but if you have two
+files that specify these sections and expect them to merge properly you are asking for trouble.
+{{< /callout >}}
+
+### Container
+
+By default, the container looks for a configuration file at `/config/configuration.yml`.
+
+### Docker
+
+This is an example of how to override the configuration files loaded in docker:
+
+```bash
+docker run -d --volume /path/to/config:/config authelia:authelia:latest authelia --config=/config/configuration.yml --config=/config/configuration.acl.yml
+```
+
+See the [Docker Documentation](https://docs.docker.com/engine/reference/commandline/run/) for more information on the
+`docker run` command.
+
+### Docker Compose
+
+An excerpt from a docker compose that allows you to specify multiple configuration files is as follows:
+
+```yaml {title="compose.yml"}
+services:
+  authelia:
+    container_name: '{{< sitevar name="host" nojs="authelia" >}}'
+    image: 'authelia/authelia:latest'
+    command:
+      - 'authelia'
+      - '--config=/config/configuration.yml'
+      - '--config=/config/configuration.acl.yml'
+
+```
+
+See the [compose file reference](https://docs.docker.com/compose/compose-file/compose-file-v3/#command) for more
+information.
+
+### Kubernetes
+
+An excerpt from a Kubernetes container that allows you to specify multiple configuration files is as follows:
+
+```yaml {title="deployment.yml"}
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: authelia
+  namespace: authelia
+  labels:
+    app.kubernetes.io/instance: authelia
+    app.kubernetes.io/name: authelia
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: authelia
+      app.kubernetes.io/name: authelia
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: authelia
+        app.kubernetes.io/name: authelia
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: authelia
+          image: docker.io/authelia/authelia:latest
+          command:
+            - authelia
+          args:
+            - '--config=/configuration.yml'
+            - '--config=/configuration.acl.yml'
+```
+
+See the Kubernetes [workloads documentation](https://kubernetes.io/docs/concepts/workloads/pods/#pod-templates) or the
+[Container API docs](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.23/#container-v1-core) for more
+information.
+
+## File Filters
+
+File filters exist which allow modification of all configuration files after reading them from the
+filesystem but before parsing their content. Unless explicitly specified these filters are _**NOT**_ covered by our
+[Standard Versioning Policy](../../policies/versioning.md).
+
+The filters are configured as a list of filter names by the `--config.filters` CLI argument and
+`X_AUTHELIA_CONFIG_FILTERS` environment variable. We recommend using the environment variable as it ensures
+commands executed from the container use the same filters. If both the CLI argument and environment variable are used
+the environment variable is completely ignored.
+
+Filters can either be used on their own, in combination, or not at all. The filters are processed in order as they are
+defined. You can preview the output of the YAML files when processed via the filters using the
+[authelia config template](../../reference/cli/authelia/authelia_config_template.md) command.
+
+{{< callout context="caution" title="Important Note" icon="outline/alert-triangle" >}}
+The filters are applied in order and thus if the output of one filter outputs a string that
+contains syntax for a subsequent filter it will be filtered. It is therefore suggested the template filter is the only
+filter and if it isn't that it's last.
+{{< /callout >}}
+
+### Examples
+
+{{< envTabs "Filters By Argument" >}}
+{{< envTab "Docker" >}}
+
+```bash
+docker run -d authelia/authelia:latest authelia --config /config/configuration.yml --config.filters template
+```
+
+{{< /envTab >}}
+{{< envTab "Bare-Metal" >}}
+
+```bash
+authelia --config /config/configuration.yml --config.filters template
+```
+
+{{< /envTab >}}
+{{< /envTabs >}}
+
+{{< envTabs "Filters By Environment" >}}
+{{< envTab "Docker" >}}
+
+```bash
+docker run -d -e X_AUTHELIA_CONFIG_FILTERS=template -e X_AUTHELIA_CONFIG=/config/configuration.yml authelia/authelia:latest authelia
+```
+
+{{< /envTab >}}
+{{< envTab "Bare-Metal" >}}
+
+```bash
+X_AUTHELIA_CONFIG_FILTERS=template X_AUTHELIA_CONFIG=/config/configuration.yml authelia
+```
+
+{{< /envTab >}}
+{{< /envTabs >}}
+
+### Values
+
+The values option allows injecting values into the configuration from an external source. If the filter supports it then
+the filter itself will detail the accessibility of the values and other data available.
+
+The values files must have one of the `.yml`, `.yaml`, `.json`, or `.toml` extensions which determines the format used to
+parse them. When multiple values files are specified they are loaded in the order specified and each one is deep-merged
+on top of the values loaded so far, i.e. where a key exists in both and both values are mappings they are recursively
+merged, otherwise the value from the later file replaces the value from the earlier file.
+
+The values files are only loaded when one of the configured filters utilizes them, which is currently only the
+[Go Template Filter](#go-template-filter). If none of the configured filters utilize the values then the values files
+are ignored and a warning is logged.
+
+Mapping keys are always strings regardless of the file format. The YAML format permits keys which are not strings, for
+example `1` or `true`, and these keys are converted to their string representation at every level which means a key of
+`1` must be accessed as the string `1`. Numeric keys are converted from their parsed value so a key of `1.0` is also
+accessed as the string `1`, and a null key such as `~` is accessed as the string `null`. It is an error for two keys in the
+same mapping to convert to the same string, for example `1` and `'1'`.
+
+### Filters
+
+The following are the available filters.
+
+#### Go Template Filter
+
+The name used to enable this filter is `template`. This filter is considered stable.
+
+This filter uses the [Go template engine](https://pkg.go.dev/text/template) to render the configuration files. It uses
+similar syntax to Jinja2 templates with different function names.
+
+Comprehensive examples are beyond what we support and people wishing to use this should consult the official
+[Go template engine](https://pkg.go.dev/text/template) documentation for syntax instructions. We also log the generated
+output at each filter stage as a base64 string when trace logging is enabled.
+
+##### Values
+
+The template filter allows access to both the values file data, and some various metadata. See the table below for more
+information.
+
+Multiple values files can be specified, see [Values](#values) for information on how they're merged.
+
+Referencing a key which does not exist, for example `{{ .Values.Missing }}`, is an error rather than rendering an empty
+or placeholder value. To optionally reference a key use the `index` function, for example
+`{{ index .Values "Missing" | default "fallback" }}`.
+
+|         Field          |            Description             |
+| :--------------------: | :--------------------------------: |
+|        .Values         | The Values from the provided files |
+|   .Authelia.Version    |     The Authelia version value     |
+|  .Authelia.Build.Tag   |    The Authelia Build Tag value    |
+| .Authelia.Build.State  |   The Authelia Build State value   |
+| .Authelia.Build.Extra  |   The Authelia Build Extra value   |
+|  .Authelia.Build.Date  |   The Authelia Build Date value    |
+| .Authelia.Build.Commit |  The Authelia Build Commit value   |
+| .Authelia.Build.Branch |  The Authelia Build Branch value   |
+| .Authelia.Build.Number |  The Authelia Build Number value   |
+
+##### Delimiters
+
+You can adjust the delimiters of this filter using the options below. Please note that an empty string is the same
+as the default values of `{{` and `}}`.
+
+|                  Argument                   |                 Environment Variable                 |                     Description                     |
+| :-----------------------------------------: | :--------------------------------------------------: | :-------------------------------------------------: |
+| `--config.filters.template.delimiter.left`  | `X_AUTHELIA_CONFIG_FILTERS_TEMPLATE_DELIMITER_LEFT`  | Changes the left delimiter from `{{` to any value.  |
+| `--config.filters.template.delimiter.right` | `X_AUTHELIA_CONFIG_FILTERS_TEMPLATE_DELIMITER_RIGHT` | Changes the right delimiter from `}}` to any value. |
+
+##### Functions
+
+In addition to the standard built-in functions we support several other functions. These functions should operate
+similarly to Helm template functions.
+
+See the [Templating Reference Guide](../../reference/guides/templating.md) for more information.
+
+#### Expand Environment Variable Filter
+
+The `expand-env` filter has been officially removed as of v4.40.0.

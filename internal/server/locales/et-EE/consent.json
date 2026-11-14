@@ -1,0 +1,42 @@
+{
+	"Claim": "Nõua {{name}}",
+	"Client ID": "Kliendi ID: {{client_id}}",
+	"Consent Request": "Nõusoleku taotlus",
+	"Remember Consent": "Jäta nõusolek meelde",
+	"Scope": "Ulatus {{name}}",
+	"The above application is requesting the following permissions": "Ülaltoodud rakendus küsib järgmisi õigusi",
+	"This saves this consent as a pre-configured consent for future use": "See salvestab selle nõusoleku eelkonfigureeritud nõusolekuna edaspidiseks kasutamiseks",
+	"claims": {
+		"address": "Postiaadress",
+		"birthdate": "Sünnipäev",
+		"email": "E-posti Aadress",
+		"email_verified": "E-posti Aadress (Kinnitatud)",
+		"family_name": "Perekonnanimi",
+		"gender": "Sugu",
+		"given_name": "Eesnimi",
+		"groups": "Grupi Liikmesus",
+		"locale": "Keel / Keel",
+		"middle_name": "Keskmine Nimi",
+		"name": "Kuva Nimi",
+		"nickname": "Hüüdnimi",
+		"phone_number": "Telefoninumber",
+		"phone_number_verified": "Telefoninumber (Kinnitatud)",
+		"picture": "Pildi URL",
+		"preferred_username": "Eelistatud Kasutajanimi",
+		"profile": "Profiili URL",
+		"sub": "Ainulaadne Identifikaator",
+		"updated_at": "Profiili Uuendamise Aeg",
+		"website": "Veebisaidi URL",
+		"zoneinfo": "Ajavöönd"
+	},
+	"scopes": {
+		"address": "Juurdepääs teie aadressile",
+		"authelia.bearer.authz": "Juurdepääs kaitstud ressurssidele sisse logides teie nime all",
+		"email": "Juurdepääs teie e-posti aadressidele",
+		"groups": "Juurdepääs teie grupi liikmesustele",
+		"offline_access": "Uuenda neid õigusi automaatselt ilma kasutaja sekkumiseta",
+		"openid": "Kasuta OpenID-d oma isiku tuvastamiseks",
+		"phone": "Juurdepääs teie telefoninumbrile",
+		"profile": "Juurdepääs oma profiili teabele"
+	}
+}

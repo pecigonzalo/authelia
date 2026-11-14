@@ -1,29 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
 ---
-run:
-  timeout: 3m
-
-linters-settings:
-  goconst:
-    min-len: 2
-    min-occurrences: 2
-  gocyclo:
-    min-complexity: 15
-  godot:
-    check-all: true
-  goimports:
-    local-prefixes: github.com/authelia/authelia
-  revive:
-    confidence: 0.8
-
+version: "2"
 linters:
   enable:
     - asciicheck
-    - goconst
+    - forbidigo
     - gocritic
     - gocyclo
+    - godoclint
     - godot
-    - gofmt
-    - goimports
     - gosec
     - misspell
     - nolintlint
@@ -32,20 +20,93 @@ linters:
     - unconvert
     - unparam
     - whitespace
-    - wsl
-
+    - wsl_v5
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: ^print.*$
+          msg: Do not commit print statements.
+        - pattern: ^fmt\.Print.*$
+          pkg: ^fmt$
+          msg: Do not commit print statements.
+      analyze-types: true
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+      ignore-tests: true
+    gocyclo:
+      min-complexity: 15
+    godoclint:
+      enable:
+        - no-unused-link
+        - require-doc
+        - require-pkg-doc
+        - require-stdlib-doclink
+    godot:
+      scope: all
+      exclude:
+        - '^\s*SPDX-'
+    revive:
+      confidence: 0.8
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - godoclint
+        path: _test\.go$
+      - linters:
+          - forbidigo
+        path: internal/commands/
+      - linters:
+          - forbidigo
+        path: cmd/
+      - path: (.+)\.go$
+        text: Error return value of .((os\.)?std(out|err)\..*|.*Close|.*Flush|os\.Remove(All)?|.*printf?|os\.(Un)?Setenv). is not checked  # yamllint disable-line rule:line-length
+      - path: (.+)\.go$
+        text: func name will be used as test\.Test.* by other packages, and that stutters; consider calling this
+      - path: (.+)\.go$
+        text: (possible misuse of unsafe.Pointer|should have signature)
+      - path: (.+)\.go$
+        text: ineffective break statement. Did you mean to break out of the outer loop
+      - path: (.+)\.go$
+        text: Use of unsafe calls should be audited
+      - path: (.+)\.go$
+        text: Subprocess launch(ed with variable|ing should be audited)
+      - path: (.+)\.go$
+        text: (G104|G307)
+      - path: (.+)\.go$
+        text: (Expect directory permissions to be 0750 or less|Expect file permissions to be 0600 or less)
+      - path: (.+)\.go$
+        text: Potential file inclusion via variable
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - internal/mocks
+      - node_modules
 issues:
-  exclude:
-    - Error return value of .((os\.)?std(out|err)\..*|.*Close|.*Flush|os\.Remove(All)?|.*printf?|os\.(Un)?Setenv). is not checked  # yamllint disable-line rule:line-length
-    - func name will be used as test\.Test.* by other packages, and that stutters; consider calling this
-    - (possible misuse of unsafe.Pointer|should have signature)
-    - ineffective break statement. Did you mean to break out of the outer loop
-    - Use of unsafe calls should be audited
-    - Subprocess launch(ed with variable|ing should be audited)
-    - (G104|G307)
-    - (Expect directory permissions to be 0750 or less|Expect file permissions to be 0600 or less)
-    - Potential file inclusion via variable
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(authelia.com,github.com/authelia)
+        - localmodule
+    goimports:
+      local-prefixes:
+        - github.com/authelia/authelia
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - node_modules
 ...

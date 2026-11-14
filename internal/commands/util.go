@@ -1,34 +1,32 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package commands
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"go.yaml.in/yaml/v4"
 	"golang.org/x/term"
 
 	"github.com/authelia/authelia/v4/internal/configuration"
+	"github.com/authelia/authelia/v4/internal/configuration/schema"
+	"github.com/authelia/authelia/v4/internal/model"
 	"github.com/authelia/authelia/v4/internal/random"
+	"github.com/authelia/authelia/v4/internal/utils"
 )
-
-func recoverErr(i any) error {
-	switch v := i.(type) {
-	case nil:
-		return nil
-	case string:
-		return fmt.Errorf("recovered panic: %s", v)
-	case error:
-		return fmt.Errorf("recovered panic: %w", v)
-	default:
-		return fmt.Errorf("recovered panic with unknown type: %v", v)
-	}
-}
 
 func flagsGetUserIdentifiersGenerateOptions(flags *pflag.FlagSet) (users, services, sectors []string, err error) {
 	if users, err = flags.GetStringSlice(cmdFlagNameUsers); err != nil {
@@ -68,7 +66,7 @@ func flagsGetRandomCharacters(flags *pflag.FlagSet, flagNameLength, flagNameChar
 	}
 
 	switch {
-	case useCharSet, !useCharSet && !useCharacters:
+	case useCharSet, !useCharacters:
 		var c string
 
 		if c, err = flags.GetString(flagNameCharSet); err != nil {
@@ -103,22 +101,35 @@ func flagsGetRandomCharacters(flags *pflag.FlagSet, flagNameLength, flagNameChar
 		default:
 			return "", fmt.Errorf("flag '--%s' with value '%s' is invalid, must be one of 'ascii', 'alphanumeric', 'alphabetic', 'numeric', 'numeric-hex', or 'rfc3986'", flagNameCharSet, c)
 		}
-	case useCharacters:
+	default:
 		if charset, err = flags.GetString(flagNameCharacters); err != nil {
 			return "", err
 		}
 	}
 
-	rand := &random.Cryptographical{}
+	rand := random.New()
 
 	return rand.StringCustom(n, charset), nil
 }
 
-func termReadConfirmation(flags *pflag.FlagSet, name, prompt, confirmation string) (confirmed bool, err error) {
-	if confirmed, _ = flags.GetBool(name); confirmed {
-		return confirmed, nil
+func flagParseFileMode(name string, flags *pflag.FlagSet) (mode os.FileMode, err error) {
+	var (
+		value string
+		octal uint64
+	)
+
+	if value, err = flags.GetString(name); err != nil {
+		return mode, err
 	}
 
+	if octal, err = strconv.ParseUint(value, 8, 32); err != nil {
+		return mode, err
+	}
+
+	return os.FileMode(octal), nil
+}
+
+func termReadConfirmation(prompt, confirmation string) (confirmed bool, err error) {
 	terminal, fd, state, err := getTerminal(prompt)
 	if err != nil {
 		return false, err
@@ -204,18 +215,24 @@ func termReadPasswordWithPrompt(prompt, flag string) (password string, err error
 	return password, nil
 }
 
+// XEnvCLIResult is the result of parsing a configuration value which can be sourced from either the CLI or the environment.
 type XEnvCLIResult int
 
+// XEnvCLIResult values.
 const (
 	XEnvCLIResultCLIExplicit XEnvCLIResult = iota
 	XEnvCLIResultCLIImplicit
 	XEnvCLIResultEnvironment
 )
 
-func loadXEnvCLIConfigValues(cmd *cobra.Command) (configs []string, filters []configuration.FileFilter, err error) {
+func loadXEnvCLIConfigValues(cmd *cobra.Command, val *schema.StructValidator) (configs []string, filters []configuration.BytesFilter, err error) {
 	var (
 		filterNames []string
+		valuesFiles []string
 		result      XEnvCLIResult
+
+		filterTemplateLeftDelim  string
+		filterTemplateRightDelim string
 	)
 
 	if configs, result, err = loadXEnvCLIStringSliceValue(cmd, cmdFlagEnvNameConfig, cmdFlagNameConfig); err != nil {
@@ -226,15 +243,80 @@ func loadXEnvCLIConfigValues(cmd *cobra.Command) (configs []string, filters []co
 		return nil, nil, err
 	}
 
-	if filterNames, _, err = loadXEnvCLIStringSliceValue(cmd, cmdFlagEnvNameConfigFilters, cmdFlagNameConfigExpFilters); err != nil {
+	if filterNames, err = loadXEnvCLIConfigFilterNames(cmd, val); err != nil {
 		return nil, nil, err
 	}
 
-	if filters, err = configuration.NewFileFilters(filterNames); err != nil {
-		return nil, nil, fmt.Errorf("error occurred loading configuration: flag '--%s' is invalid: %w", cmdFlagNameConfigExpFilters, err)
+	if filterTemplateLeftDelim, _, err = loadXEnvCLIStringValue(cmd, cmdFlagEnvNameConfigFiltersTemplateLeftDelimiter, cmdFlagNameConfigFiltersTemplateDelimiterLeft); err != nil {
+		return nil, nil, err
+	}
+
+	if filterTemplateRightDelim, _, err = loadXEnvCLIStringValue(cmd, cmdFlagEnvNameConfigFiltersTemplateRightDelimiter, cmdFlagNameConfigFiltersTemplateDelimiterRight); err != nil {
+		return nil, nil, err
+	}
+
+	if valuesFiles, _, err = loadXEnvCLIStringSliceValue(cmd, cmdFlagEnvNameConfigFiltersValues, cmdFlagNameConfigFiltersValues); err != nil {
+		return nil, nil, err
+	}
+
+	if valuesFiles, err = loadXNormalizedValuesPaths(valuesFiles); err != nil {
+		return nil, nil, fmt.Errorf("error occurred loading configuration: flag '--%s' is invalid: %w", cmdFlagNameConfigFiltersValues, err)
+	}
+
+	if filters, err = configuration.NewFileFilters(valuesFiles, filterTemplateLeftDelim, filterTemplateRightDelim, filterNames...); err != nil {
+		var errValues *configuration.FilterValuesError
+
+		if errors.As(err, &errValues) {
+			return nil, nil, fmt.Errorf("error occurred loading configuration: flag '--%s' is invalid: %w", cmdFlagNameConfigFiltersValues, err)
+		}
+
+		return nil, nil, fmt.Errorf("error occurred loading configuration: flag '--%s' is invalid: %w", cmdFlagNameConfigFilters, err)
 	}
 
 	return
+}
+
+func loadXEnvCLIConfigFilterNames(cmd *cobra.Command, val *schema.StructValidator) (names []string, err error) {
+	if !cmd.Flags().Changed(cmdFlagNameConfigExpFilters) {
+		names, _, err = loadXEnvCLIStringSliceValue(cmd, cmdFlagEnvNameConfigFilters, cmdFlagNameConfigFilters)
+
+		return names, err
+	}
+
+	if cmd.Flags().Changed(cmdFlagNameConfigFilters) {
+		return nil, fmt.Errorf("error occurred loading configuration: flag '--%s' and flag '--%s' can't be specified at the same time, the '--%s' flag is deprecated and should be removed", cmdFlagNameConfigFilters, cmdFlagNameConfigExpFilters, cmdFlagNameConfigExpFilters)
+	}
+
+	if names, err = cmd.Flags().GetStringSlice(cmdFlagNameConfigExpFilters); err != nil {
+		return nil, err
+	}
+
+	val.PushWarning(fmt.Errorf("the '--%s' flag is deprecated and will be removed in a future release, it should be replaced with the '--%s' flag", cmdFlagNameConfigExpFilters, cmdFlagNameConfigFilters))
+
+	return names, nil
+}
+
+func loadXNormalizedValuesPaths(paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return paths, nil
+	}
+
+	values := make([]string, 0, len(paths))
+
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+
+		value, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine absolute path for '%s': %w", path, err)
+		}
+
+		values = append(values, value)
+	}
+
+	return values, nil
 }
 
 func loadXNormalizedPaths(paths []string, result XEnvCLIResult) ([]string, error) {
@@ -293,6 +375,32 @@ func loadXNormalizedPaths(paths []string, result XEnvCLIResult) ([]string, error
 	return configs, nil
 }
 
+func loadXEnvCLIStringValue(cmd *cobra.Command, envKey, flagName string) (value string, result XEnvCLIResult, err error) {
+	if cmd.Flags().Changed(flagName) {
+		value, err = cmd.Flags().GetString(flagName)
+
+		return value, XEnvCLIResultCLIExplicit, err
+	}
+
+	var (
+		env string
+		ok  bool
+	)
+
+	if envKey != "" {
+		env, ok = os.LookupEnv(envKey)
+	}
+
+	switch {
+	case ok && env != "":
+		return env, XEnvCLIResultEnvironment, nil
+	default:
+		value, err = cmd.Flags().GetString(flagName)
+
+		return value, XEnvCLIResultCLIImplicit, err
+	}
+}
+
 func loadXEnvCLIStringSliceValue(cmd *cobra.Command, envKey, flagName string) (value []string, result XEnvCLIResult, err error) {
 	if cmd.Flags().Changed(flagName) {
 		value, err = cmd.Flags().GetStringSlice(flagName)
@@ -325,14 +433,187 @@ func newHelpTopic(topic, short, body string) (cmd *cobra.Command) {
 		Short: short,
 	}
 
-	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		_ = cmd.Parent().Help()
+	cmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		cmdHelpTopic(cmd, body, topic)
 
-		fmt.Println()
-		fmt.Printf("Help Topic: %s\n\n", topic)
-		fmt.Print(body)
-		fmt.Print("\n\n")
+		return nil
+	})
+
+	cmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		cmdHelpTopic(cmd, body, topic)
 	})
 
 	return cmd
+}
+
+func cmdHelpTopic(cmd *cobra.Command, body, topic string) {
+	_ = cmd.Parent().Help()
+
+	_, _ = fmt.Fprintln(cmd.OutOrStdout())
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Help Topic: %s\n\n", topic)
+	_, _ = fmt.Fprint(cmd.OutOrStdout(), body)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n\n")
+}
+
+type fileFormat string
+
+const (
+	fileFormatYAML fileFormat = "YAML"
+	fileFormatTOML fileFormat = "TOML"
+	fileFormatJSON fileFormat = "JSON"
+)
+
+func fileFormatFromName(filename string) (format fileFormat) {
+	switch filepath.Ext(filename) {
+	case utils.ExtTOML:
+		return fileFormatTOML
+	case utils.ExtJSON:
+		return fileFormatJSON
+	default:
+		return fileFormatYAML
+	}
+}
+
+type encoder interface {
+	Encode(v any) (err error)
+}
+
+func importFile(filename string, data []byte, out any) (err error) {
+	switch format := fileFormatFromName(filename); format {
+	case fileFormatTOML:
+		err = toml.Unmarshal(data, out)
+	case fileFormatJSON:
+		err = json.Unmarshal(data, out)
+	default:
+		err = yaml.Unmarshal(data, out)
+	}
+
+	return err
+}
+
+func exportFile(filename string, v any, schemaName string) (err error) {
+	var f *os.File
+
+	if f, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600); err != nil {
+		return err
+	}
+
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	var enc encoder
+
+	format := fileFormatFromName(filename)
+
+	switch format {
+	case fileFormatTOML:
+		enc = toml.NewEncoder(f)
+	case fileFormatJSON:
+		if len(schemaName) != 0 {
+			if v, err = exportJSONFileInjectJSONSchema(schemaName, v); err != nil {
+				return fmt.Errorf("error occurred marshaling data to %s: %w", format, err)
+			}
+		}
+
+		enc = json.NewEncoder(f)
+	default:
+		if len(schemaName) != 0 {
+			if err = exportYAMLFileWriteJSONSchema(f, schemaName); err != nil {
+				return err
+			}
+		}
+
+		enc = yaml.NewEncoder(f)
+	}
+
+	if err = enc.Encode(v); err != nil {
+		return fmt.Errorf("error occurred marshaling data to %s: %w", format, err)
+	}
+
+	return nil
+}
+
+func exportYAMLFileWriteJSONSchema(w io.StringWriter, name string) (err error) {
+	if _, err = w.WriteString(fmt.Sprintf(model.FormatJSONSchemaYAMLLanguageServer, jsonSchemaVersion(), name)); err != nil {
+		return err
+	}
+
+	if _, err = w.WriteString("\n\n"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func exportJSONFileInjectJSONSchema(name string, v any) (out any, err error) {
+	var data []byte
+
+	if data, err = json.Marshal(v); err != nil {
+		return nil, fmt.Errorf("failed to marshal payload while injecting $schema: %w", err)
+	}
+
+	m := map[string]any{}
+
+	if err = json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("failed to inject $schema: payload is not a JSON object: %w", err)
+	}
+
+	m["$schema"] = fmt.Sprintf(model.FormatJSONSchemaIdentifier, jsonSchemaVersion(), name)
+
+	return m, nil
+}
+
+func jsonSchemaVersion() (version string) {
+	version = "latest"
+
+	if semver, err := model.NewSemanticVersion(utils.BuildTag); err == nil {
+		version = fmt.Sprintf("v%d.%d", semver.Major, semver.Minor+1)
+	}
+
+	return version
+}
+
+func getCryptoHashGenerateMapFlagsFromUse(use string) (flags map[string]string) {
+	switch use {
+	case cmdUseHashArgon2:
+		return map[string]string{
+			cmdFlagNameVariant:     prefixFilePassword + suffixArgon2Variant,
+			cmdFlagNameIterations:  prefixFilePassword + suffixArgon2Iterations,
+			cmdFlagNameMemory:      prefixFilePassword + suffixArgon2Memory,
+			cmdFlagNameParallelism: prefixFilePassword + suffixArgon2Parallelism,
+			cmdFlagNameKeySize:     prefixFilePassword + suffixArgon2KeyLength,
+			cmdFlagNameSaltSize:    prefixFilePassword + suffixArgon2SaltLength,
+		}
+	case cmdUseHashSHA2Crypt:
+		return map[string]string{
+			cmdFlagNameVariant:    prefixFilePassword + suffixSHA2CryptVariant,
+			cmdFlagNameIterations: prefixFilePassword + suffixSHA2CryptIterations,
+			cmdFlagNameSaltSize:   prefixFilePassword + suffixSHA2CryptSaltLength,
+		}
+	case cmdUseHashPBKDF2:
+		return map[string]string{
+			cmdFlagNameVariant:    prefixFilePassword + suffixPBKDF2Variant,
+			cmdFlagNameIterations: prefixFilePassword + suffixPBKDF2Iterations,
+			cmdFlagNameSaltSize:   prefixFilePassword + suffixPBKDF2SaltLength,
+		}
+	case cmdUseHashBcrypt:
+		return map[string]string{
+			cmdFlagNameVariant: prefixFilePassword + suffixBcryptVariant,
+			cmdFlagNameCost:    prefixFilePassword + suffixBcryptCost,
+		}
+	case cmdUseHashScrypt:
+		return map[string]string{
+			cmdFlagNameVariant:     prefixFilePassword + suffixScryptVariant,
+			cmdFlagNameIterations:  prefixFilePassword + suffixScryptIterations,
+			cmdFlagNameBlockSize:   prefixFilePassword + suffixScryptBlockSize,
+			cmdFlagNameParallelism: prefixFilePassword + suffixScryptParallelism,
+			cmdFlagNameKeySize:     prefixFilePassword + suffixScryptKeyLength,
+			cmdFlagNameSaltSize:    prefixFilePassword + suffixScryptSaltLength,
+		}
+	default:
+		return nil
+	}
 }

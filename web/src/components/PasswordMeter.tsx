@@ -1,126 +1,173 @@
-import React, { useEffect, useState } from "react";
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
 
-import { Box, Theme } from "@mui/material";
-import makeStyles from "@mui/styles/makeStyles";
-import classnames from "classnames";
+import { useMemo } from "react";
+
 import { useTranslation } from "react-i18next";
 import zxcvbn from "zxcvbn";
 
+import { Alert, AlertDescription, AlertTitle } from "@components/UI/Alert";
 import { PasswordPolicyConfiguration, PasswordPolicyMode } from "@models/PasswordPolicy";
+import { Translate } from "@services/ErrorCode";
 
 export interface Props {
     value: string;
-    policy: PasswordPolicyConfiguration;
+    policy?: PasswordPolicyConfiguration;
 }
+
+const getStandardPasswordInfo = (password: string, policy: PasswordPolicyConfiguration, translate: Translate) => {
+    let feedback = "";
+    let feedbackTitle = "";
+    let passwordScore = 0;
+    const maxScore = 3;
+
+    if (password.length < policy.min_length) {
+        feedback = translate("Must be at least {{len}} characters in length", {
+            len: policy.min_length,
+        });
+        return { feedback, feedbackTitle, maxScore, passwordScore };
+    }
+
+    if (policy.max_length !== 0 && password.length > policy.max_length) {
+        feedback = translate("Must not be more than {{len}} characters in length", {
+            len: policy.max_length,
+        });
+        return { feedback, feedbackTitle, maxScore, passwordScore };
+    }
+
+    let required = 0;
+    let hits = 0;
+    let warning = "";
+
+    const checks = [
+        {
+            message: "Must have at least one lowercase letter",
+            regex: /[a-z]/,
+            require: policy.require_lowercase,
+        },
+        {
+            message: "Must have at least one UPPERCASE letter",
+            regex: /[A-Z]/,
+            require: policy.require_uppercase,
+        },
+        {
+            message: "Must have at least one number",
+            regex: /\d/,
+            require: policy.require_number,
+        },
+        {
+            message: "Must have at least one special character",
+            regex: /[^a-z0-9]/i,
+            require: policy.require_special,
+        },
+    ];
+
+    for (const { message, regex, require } of checks) {
+        if (require) {
+            required++;
+            if (regex.test(password)) {
+                hits++;
+            } else {
+                warning += "* " + translate(message) + "\n";
+            }
+        }
+    }
+
+    let score = 1;
+    score += hits > 0 ? 1 : 0;
+    score += required === hits ? 1 : 0;
+
+    if (warning !== "") {
+        feedbackTitle = translate("The password does not meet the password policy");
+    }
+
+    feedback = warning;
+    passwordScore = score;
+
+    return { feedback, feedbackTitle, maxScore, passwordScore };
+};
+
+const getZXCVBNPasswordInfo = (password: string) => {
+    const { feedback: zxcvbnFeedback, score } = zxcvbn(password);
+    return {
+        feedback: "",
+        feedbackTitle: zxcvbnFeedback.warning,
+        maxScore: 4,
+        passwordScore: score,
+    };
+};
 
 const PasswordMeter = function (props: Props) {
     const { t: translate } = useTranslation();
 
-    const [progressColor] = useState(["#D32F2F", "#FF5722", "#FFEB3B", "#AFB42B", "#62D32F"]);
-    const [passwordScore, setPasswordScore] = useState(0);
-    const [maxScores, setMaxScores] = useState(0);
-    const [feedback, setFeedback] = useState("");
-
-    useEffect(() => {
+    const { feedback, feedbackTitle, isZXCVBN, maxScore, passwordScore } = useMemo(() => {
         const password = props.value;
-        if (props.policy.mode === PasswordPolicyMode.Standard) {
-            //use mode mode
-            setMaxScores(4);
-            if (password.length < props.policy.min_length) {
-                setPasswordScore(0);
-                setFeedback(
-                    translate("Must be at least {{len}} characters in length", { len: props.policy.min_length }),
-                );
-                return;
-            }
-            if (props.policy.max_length !== 0 && password.length > props.policy.max_length) {
-                setPasswordScore(0);
-                setFeedback(
-                    translate("Must not be more than {{len}} characters in length", { len: props.policy.max_length }),
-                );
-                return;
-            }
-            setFeedback("");
-            let score = 1;
-            let required = 0;
-            let hits = 0;
-            let warning = "";
-            if (props.policy.require_lowercase) {
-                required++;
-                const hasLowercase = /[a-z]/.test(password);
-                if (hasLowercase) {
-                    hits++;
-                } else {
-                    warning += "* " + translate("Must have at least one lowercase letter") + "\n";
-                }
-            }
+        const policy = props.policy;
 
-            if (props.policy.require_uppercase) {
-                required++;
-                const hasUppercase = /[A-Z]/.test(password);
-                if (hasUppercase) {
-                    hits++;
-                } else {
-                    warning += "* " + translate("Must have at least one UPPERCASE letter") + "\n";
-                }
-            }
-
-            if (props.policy.require_number) {
-                required++;
-                const hasNumber = /[0-9]/.test(password);
-                if (hasNumber) {
-                    hits++;
-                } else {
-                    warning += "* " + translate("Must have at least one number") + "\n";
-                }
-            }
-
-            if (props.policy.require_special) {
-                required++;
-                const hasSpecial = /[^a-z0-9]/i.test(password);
-                if (hasSpecial) {
-                    hits++;
-                } else {
-                    warning += "* " + translate("Must have at least one special character") + "\n";
-                }
-            }
-            score += hits > 0 ? 1 : 0;
-            score += required === hits ? 1 : 0;
-            if (warning !== "") {
-                setFeedback(translate("The password does not meet the password policy") + ":\n" + warning);
-            }
-            setPasswordScore(score);
-        } else if (props.policy.mode === PasswordPolicyMode.ZXCVBN) {
-            //use zxcvbn mode
-            setMaxScores(5);
-            const { score, feedback } = zxcvbn(password);
-            setFeedback(feedback.warning);
-            setPasswordScore(score);
+        if (!policy) {
+            return {
+                feedback: "",
+                feedbackTitle: "",
+                isZXCVBN: false,
+                maxScore: 3,
+                passwordScore: 0,
+            };
         }
+
+        if (policy.mode === PasswordPolicyMode.Standard) {
+            return {
+                ...getStandardPasswordInfo(password, policy, translate),
+                isZXCVBN: false,
+            };
+        } else if (policy.mode === PasswordPolicyMode.ZXCVBN) {
+            return {
+                ...getZXCVBNPasswordInfo(password),
+                isZXCVBN: true,
+            };
+        }
+
+        return {
+            feedback: "",
+            feedbackTitle: "",
+            isZXCVBN: false,
+            maxScore: 3,
+            passwordScore: 0,
+        };
     }, [props, translate]);
 
-    const styles = makeStyles((theme: Theme) => ({
-        progressBar: {
-            height: "5px",
-            marginTop: "2px",
-            backgroundColor: progressColor[passwordScore],
-            width: `${(passwordScore + 1) * (100 / maxScores)}%`,
-            transition: "width .5s linear",
-        },
-        progressContainer: {
-            width: "100%",
-        },
-    }))();
+    const progressColor = isZXCVBN
+        ? ["#D32F2F", "#FF5722", "#FFEB3B", "#AFB42B", "#62D32F"]
+        : ["#D32F2F", "#FF5722", "#FFEB3B", "#62D32F"];
 
     return (
-        <Box className={styles.progressContainer}>
-            <Box title={feedback} className={classnames(styles.progressBar)} />
-        </Box>
+        <div className="w-full">
+            <div
+                className="mt-0.5 transition-[width] duration-500 ease-linear"
+                style={{
+                    backgroundColor: progressColor[passwordScore],
+                    height: "5px",
+                    width: `${passwordScore * (100 / maxScore)}%`,
+                }}
+            />
+            {(feedbackTitle !== "" || feedback !== "") && (
+                <Alert variant="default">
+                    {feedbackTitle !== "" && (
+                        <AlertTitle className="text-[0.85rem] text-left whitespace-break-spaces">
+                            <p>{feedbackTitle}</p>
+                        </AlertTitle>
+                    )}
+                    <AlertDescription className="text-[0.7rem] text-left whitespace-break-spaces">
+                        {feedback}
+                    </AlertDescription>
+                </Alert>
+            )}
+        </div>
     );
 };
 
 PasswordMeter.defaultProps = {
-    minLength: 0,
+    policy: { minLength: 0 },
 };
 
 export default PasswordMeter;

@@ -1,116 +1,98 @@
-import React, { Suspense, useEffect, useState } from "react";
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
 
-import createCache from "@emotion/cache";
-import { CacheProvider } from "@emotion/react";
-import { config as faConfig } from "@fortawesome/fontawesome-svg-core";
-import { CssBaseline, ThemeProvider } from "@mui/material";
-import { Route, BrowserRouter as Router, Routes } from "react-router-dom";
+import { Suspense, lazy } from "react";
 
-import NotificationBar from "@components/NotificationBar";
+import { CSPProvider } from "@base-ui/react/csp-provider";
+import { useTranslation } from "react-i18next";
+import { Route, BrowserRouter as Router, Routes } from "react-router";
+
+import { TooltipProvider } from "@components/UI/Tooltip";
 import {
     ConsentRoute,
+    ErrorRoute,
     IndexRoute,
     LogoutRoute,
-    RegisterOneTimePasswordRoute,
-    RegisterWebauthnRoute,
     ResetPasswordStep1Route,
     ResetPasswordStep2Route,
+    RevokeOneTimeCodeRoute,
+    RevokeResetPasswordRoute,
+    SettingsRoute,
 } from "@constants/Routes";
-import NotificationsContext from "@hooks/NotificationsContext";
-import { Notification } from "@models/Notifications";
-import * as themes from "@themes/index";
+import LanguageContextProvider from "@contexts/LanguageContext";
+import LocalStorageMethodContextProvider from "@contexts/LocalStorageMethodContext";
+import NotificationsContextProvider from "@contexts/NotificationsContext";
+import ThemeContextProvider from "@contexts/ThemeContext";
 import { getBasePath } from "@utils/BasePath";
 import {
+    getCSPNonce,
     getDuoSelfEnrollment,
+    getPasskeyLogin,
+    getRegistrationURL,
     getRememberMe,
     getResetPassword,
     getResetPasswordCustomURL,
-    getTheme,
 } from "@utils/Configuration";
-import RegisterOneTimePassword from "@views/DeviceRegistration/RegisterOneTimePassword";
-import RegisterWebauthn from "@views/DeviceRegistration/RegisterWebauthn";
-import BaseLoadingPage from "@views/LoadingPage/BaseLoadingPage";
-import ConsentView from "@views/LoginPortal/ConsentView/ConsentView";
+import LoadingPage from "@views/LoadingPage/LoadingPage";
 import LoginPortal from "@views/LoginPortal/LoginPortal";
-import SignOut from "@views/LoginPortal/SignOut/SignOut";
-import ResetPasswordStep1 from "@views/ResetPassword/ResetPasswordStep1";
-import ResetPasswordStep2 from "@views/ResetPassword/ResetPasswordStep2";
 
-import "@fortawesome/fontawesome-svg-core/styles.css";
+const ConsentPortal = lazy(() => import("@views/ConsentPortal/ConsentPortal"));
+const ErrorView = lazy(() => import("@views/Error/ErrorView"));
+const ResetPasswordStep1 = lazy(() => import("@views/ResetPassword/ResetPasswordStep1"));
+const ResetPasswordStep2 = lazy(() => import("@views/ResetPassword/ResetPasswordStep2"));
+const RevokeOneTimeCodeView = lazy(() => import("@views/Revoke/RevokeOneTimeCodeView"));
+const RevokeResetPasswordTokenView = lazy(() => import("@views/Revoke/RevokeResetPasswordTokenView"));
+const SettingsRouter = lazy(() => import("@views/Settings/SettingsRouter"));
+const SignOut = lazy(() => import("@views/LoginPortal/SignOut/SignOut"));
 
-faConfig.autoAddCss = false;
+function App() {
+    const { i18n } = useTranslation();
 
-function Theme() {
-    switch (getTheme()) {
-        case "dark":
-            return themes.Dark;
-        case "grey":
-            return themes.Grey;
-        case "auto":
-            return window.matchMedia("(prefers-color-scheme: dark)").matches ? themes.Dark : themes.Light;
-        default:
-            return themes.Light;
-    }
-}
-
-export interface Props {
-    nonce?: string;
-}
-
-const App: React.FC<Props> = (props: Props) => {
-    const [notification, setNotification] = useState(null as Notification | null);
-    const [theme, setTheme] = useState(Theme());
-
-    const cache = createCache({
-        key: "authelia",
-        nonce: props.nonce,
-        prepend: true,
-    });
-
-    useEffect(() => {
-        if (getTheme() === "auto") {
-            const query = window.matchMedia("(prefers-color-scheme: dark)");
-            // MediaQueryLists does not inherit from EventTarget in Internet Explorer
-            if (query.addEventListener) {
-                query.addEventListener("change", (e) => {
-                    setTheme(e.matches ? themes.Dark : themes.Light);
-                });
-            }
-        }
-    }, []);
     return (
-        <CacheProvider value={cache}>
-            <ThemeProvider theme={theme}>
-                <Suspense fallback={<BaseLoadingPage message={"Loading"} />}>
-                    <CssBaseline />
-                    <NotificationsContext.Provider value={{ notification, setNotification }}>
-                        <Router basename={getBasePath()}>
-                            <NotificationBar onClose={() => setNotification(null)} />
-                            <Routes>
-                                <Route path={ResetPasswordStep1Route} element={<ResetPasswordStep1 />} />
-                                <Route path={ResetPasswordStep2Route} element={<ResetPasswordStep2 />} />
-                                <Route path={RegisterWebauthnRoute} element={<RegisterWebauthn />} />
-                                <Route path={RegisterOneTimePasswordRoute} element={<RegisterOneTimePassword />} />
-                                <Route path={LogoutRoute} element={<SignOut />} />
-                                <Route path={ConsentRoute} element={<ConsentView />} />
-                                <Route
-                                    path={`${IndexRoute}*`}
-                                    element={
-                                        <LoginPortal
-                                            duoSelfEnrollment={getDuoSelfEnrollment()}
-                                            rememberMe={getRememberMe()}
-                                            resetPassword={getResetPassword()}
-                                            resetPasswordCustomURL={getResetPasswordCustomURL()}
-                                        />
-                                    }
-                                />
-                            </Routes>
-                        </Router>
-                    </NotificationsContext.Provider>
-                </Suspense>
-            </ThemeProvider>
-        </CacheProvider>
+        <CSPProvider nonce={getCSPNonce()}>
+            <LanguageContextProvider i18n={i18n}>
+                <ThemeContextProvider>
+                    <Suspense fallback={<LoadingPage />}>
+                        <TooltipProvider>
+                            <NotificationsContextProvider>
+                                <LocalStorageMethodContextProvider>
+                                    <Router basename={getBasePath()}>
+                                        <Routes>
+                                            <Route path={`${ConsentRoute}/*`} element={<ConsentPortal />} />
+                                            <Route path={ErrorRoute} element={<ErrorView />} />
+                                            <Route
+                                                path={`${IndexRoute}*`}
+                                                element={
+                                                    <LoginPortal
+                                                        duoSelfEnrollment={getDuoSelfEnrollment()}
+                                                        passkeyLogin={getPasskeyLogin()}
+                                                        rememberMe={getRememberMe()}
+                                                        resetPassword={getResetPassword()}
+                                                        resetPasswordCustomURL={getResetPasswordCustomURL()}
+                                                        registrationURL={getRegistrationURL()}
+                                                    />
+                                                }
+                                            />
+                                            <Route path={LogoutRoute} element={<SignOut />} />
+                                            <Route path={ResetPasswordStep1Route} element={<ResetPasswordStep1 />} />
+                                            <Route path={ResetPasswordStep2Route} element={<ResetPasswordStep2 />} />
+                                            <Route path={RevokeOneTimeCodeRoute} element={<RevokeOneTimeCodeView />} />
+                                            <Route
+                                                path={RevokeResetPasswordRoute}
+                                                element={<RevokeResetPasswordTokenView />}
+                                            />
+                                            <Route path={`${SettingsRoute}/*`} element={<SettingsRouter />} />
+                                        </Routes>
+                                    </Router>
+                                </LocalStorageMethodContextProvider>
+                            </NotificationsContextProvider>
+                        </TooltipProvider>
+                    </Suspense>
+                </ThemeContextProvider>
+            </LanguageContextProvider>
+        </CSPProvider>
     );
-};
+}
 
 export default App;

@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Authelia
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Contributor Covenant Code of Conduct
 
 ## Our Pledge
@@ -33,8 +39,45 @@ Examples of unacceptable behavior include:
 * Public or private harassment
 * Publishing others' private information, such as a physical or email
   address, without their explicit permission
-* Other conduct which could reasonably be considered inappropriate in a
+* Other conduct which could reasonably be considered to be inappropriate in a
   professional setting
+
+### Focused on Technology
+
+Authelia is focused solely on the technology itself. We aim to remain completely
+neutral in all ideological, political, and other controversial matters. We
+consider this a professional standard within the community. This aligns with our
+second guiding standard; being respectful of differing opinions, viewpoints, and
+experiences.
+
+While we will not be expressly strict about this and we will be somewhat permissive
+of such topics, we discourage them and there are a few guidelines to be aware of.
+The core intent by these guidelines is that we do not want unrelated matters to
+cause a divide within our community, there are other more appropriate communities
+to have these disagreements.
+
+Discussion about topics which can reasonably be categorized like this or are
+otherwise not related to technology should strictly be conducted in off topic
+areas of the community. These discussions must at all times be professional and
+civilized.
+
+If you believe one of these topics is not in line with other areas of our code
+of conduct we strongly urge people to not engage in the discussion and instead
+bring it to the attention of a community leader.
+
+At any point if a community leader requests that any non-technical discussion
+should not continue then all parties will immediately respect and adhere to
+such a request without disagreement.
+
+In the event that one of these topics becomes a heated argument within all
+likelihood action will be taken against all parties still involved as to avoid
+taking any particular stance on any non-technical disagreement. The actions
+taken will be as described in this code of conduct.
+
+### Artificial Intelligence Policy
+
+We publish an [Artificial Intelligence Policy] which augments this Code of Conduct. These guidelines should be
+considered enforced under this Code of Conduct.
 
 ## Enforcement Responsibilities
 
@@ -121,8 +164,9 @@ https://www.contributor-covenant.org/version/2/0/code_of_conduct.html.
 Community Impact Guidelines were inspired by [Mozilla's code of conduct
 enforcement ladder](https://github.com/mozilla/diversity).
 
-[homepage]: https://www.contributor-covenant.org
-
 For answers to common questions about this code of conduct, see the FAQ at
 https://www.contributor-covenant.org/faq. Translations are available at
 https://www.contributor-covenant.org/translations.
+
+[homepage]: https://www.contributor-covenant.org
+[Artificial Intelligence Policy]: https://www.authelia.com/policies/artificial-intelligence/

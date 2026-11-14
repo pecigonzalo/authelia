@@ -1,9 +1,16 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package middlewares
 
 import (
 	"errors"
+	"net"
 
 	"github.com/valyala/fasthttp"
+
+	"github.com/authelia/authelia/v4/internal/configuration/schema"
 )
 
 var (
@@ -18,13 +25,15 @@ var (
 	headerXForwardedFor   = []byte(fasthttp.HeaderXForwardedFor)
 	headerXRequestedWith  = []byte(fasthttp.HeaderXRequestedWith)
 
+	headerSecFetchMode = []byte("Sec-Fetch-Mode")
+	headerSecFetchDest = []byte("Sec-Fetch-Dest")
+
 	headerXForwardedURI    = []byte("X-Forwarded-URI")
 	headerXOriginalURL     = []byte("X-Original-URL")
 	headerXOriginalMethod  = []byte("X-Original-Method")
 	headerXForwardedMethod = []byte("X-Forwarded-Method")
 
 	headerVary   = []byte(fasthttp.HeaderVary)
-	headerAllow  = []byte(fasthttp.HeaderAllow)
 	headerOrigin = []byte(fasthttp.HeaderOrigin)
 
 	headerAccessControlAllowCredentials = []byte(fasthttp.HeaderAccessControlAllowCredentials)
@@ -34,21 +43,42 @@ var (
 	headerAccessControlMaxAge           = []byte(fasthttp.HeaderAccessControlMaxAge)
 	headerAccessControlRequestHeaders   = []byte(fasthttp.HeaderAccessControlRequestHeaders)
 	headerAccessControlRequestMethod    = []byte(fasthttp.HeaderAccessControlRequestMethod)
+	headerRetryAfter                    = []byte(fasthttp.HeaderRetryAfter)
 
 	headerXContentTypeOptions   = []byte(fasthttp.HeaderXContentTypeOptions)
 	headerReferrerPolicy        = []byte(fasthttp.HeaderReferrerPolicy)
 	headerXFrameOptions         = []byte(fasthttp.HeaderXFrameOptions)
 	headerPragma                = []byte(fasthttp.HeaderPragma)
 	headerCacheControl          = []byte(fasthttp.HeaderCacheControl)
-	headerXXSSProtection        = []byte(fasthttp.HeaderXXSSProtection)
 	headerContentSecurityPolicy = []byte(fasthttp.HeaderContentSecurityPolicy)
+	headerContentType           = []byte(fasthttp.HeaderContentType)
 
-	headerPermissionsPolicy = []byte("Permissions-Policy")
+	headerPermissionsPolicy         = []byte("Permissions-Policy")
+	headerCrossOriginOpenerPolicy   = []byte("Cross-Origin-Opener-Policy")
+	headerCrossOriginEmbedderPolicy = []byte("Cross-Origin-Embedder-Policy")
+	headerCrossOriginResourcePolicy = []byte("Cross-Origin-Resource-Policy")
+	headerXDNSPrefetchControl       = []byte("X-DNS-Prefetch-Control")
+
+	headerForwarded = []byte(fasthttp.HeaderForwarded)
+	headerVia       = []byte(fasthttp.HeaderVia)
+)
+
+var (
+	headerPrefixXForwarded = []byte("X-Forwarded-")
+	headerPrefixXOriginal  = []byte("X-Original-")
+	headerPrefixXReal      = []byte("X-Real-")
+)
+
+// Header value strings.
+const (
+	HeaderCacheControlNotStore = "no-store"
+	HeaderPragmaNoCache        = "no-cache"
 )
 
 var (
 	headerValueFalse           = []byte("false")
 	headerValueTrue            = []byte("true")
+	headerValueOff             = []byte("off")
 	headerValueMaxAge          = []byte("100")
 	headerValueVary            = []byte("Accept-Encoding, Origin")
 	headerValueVaryWildcard    = []byte("Accept-Encoding")
@@ -56,24 +86,73 @@ var (
 	headerValueZero            = []byte("0")
 	headerValueCSPNone         = []byte("default-src 'none'")
 	headerValueCSPNoneFormPost = []byte("default-src 'none'; script-src 'sha256-skflBqA90WuHvoczvimLdj49ExKdizFjX2Itd6xKZdU='")
+	headerValueCSPSelf         = []byte("default-src 'self'")
 
 	headerValueNoSniff                 = []byte("nosniff")
 	headerValueStrictOriginCrossOrigin = []byte("strict-origin-when-cross-origin")
-	headerValueSameOrigin              = []byte("SAMEORIGIN")
-	headerValueNoCache                 = []byte("no-cache")
-	headerValueNoStore                 = []byte("no-store")
-	headerValueXSSModeBlock            = []byte("1; mode=block")
-	headerValueCohort                  = []byte("interest-cohort=()")
+	headerValueDENY                    = []byte("DENY")
+	headerValueSameOrigin              = []byte("same-origin")
+	headerValueCrossOrigin             = []byte("cross-origin")
+	headerValueSameSite                = []byte("same-site")
+	headerValueUnsafeNone              = []byte("unsafe-none")
+	headerValueRequireCORP             = []byte("require-corp")
+	headerValueNoCache                 = []byte(HeaderPragmaNoCache)
+	headerValueNoStore                 = []byte(HeaderCacheControlNotStore)
+	headerValuePermissionsPolicy       = []byte("accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), keyboard-map=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), screen-wake-lock=(), sync-xhr=(), xr-spatial-tracking=(), interest-cohort=()")
 )
 
 const (
+	strProtoHTTP2 = "HTTP/2"
 	strProtoHTTPS = "https"
 	strProtoHTTP  = "http"
 	strSlash      = "/"
+	localhost     = "127.0.0.1"
 
 	queryArgRedirect    = "rd"
 	queryArgAutheliaURL = "authelia_url"
 	queryArgToken       = "token"
+)
+
+const healthCheckEnv = `# Written by Authelia Process
+X_AUTHELIA_HEALTHCHECK=1
+X_AUTHELIA_HEALTHCHECK_SCHEME=%s
+X_AUTHELIA_HEALTHCHECK_HOST=%s
+X_AUTHELIA_HEALTHCHECK_PORT=%d
+X_AUTHELIA_HEALTHCHECK_PATH=%s
+`
+
+// User value keys.
+const (
+	UserValueKeyBaseURL int8 = iota
+	UserValueKeyOpenIDConnectResponseModeFormPost
+	UserValueKeyRawURI
+	UserValueRateLimitExempt
+)
+
+// Router user value keys.
+const (
+	UserValueRouterKeyExtAuthzPath = "extauthz"
+)
+
+// Startup check log messages and provider names.
+const (
+	LogMessageStartupCheckError      = "Error occurred running a startup check"
+	LogMessageStartupCheckPerforming = "Performing Startup Check"
+
+	ProviderNameNTP              = schema.ProviderNameNTP
+	ProviderNameStorage          = schema.ProviderNameStorage
+	ProviderNameCache            = schema.ProviderNameCache
+	ProviderNameUser             = schema.ProviderNameUser
+	ProviderNameNotification     = schema.ProviderNameNotification
+	ProviderNameExpressions      = schema.ProviderNameExpressions
+	ProviderNameDuo              = schema.ProviderNameDuo
+	ProviderNameWebAuthnMetaData = schema.ProviderNameWebAuthnMetaData
+)
+
+// Content Type strings.
+const (
+	ContentTypeApplicationJSON = "application/json; charset=utf-8"
+	ContentTypeApplicationJWT  = "application/jwt; charset=utf-8"
 )
 
 var (
@@ -83,32 +162,40 @@ var (
 	qryArgRedirect    = []byte(queryArgRedirect)
 	qryArgAutheliaURL = []byte(queryArgAutheliaURL)
 
-	keyUserValueBaseURL   = []byte("base_url")
-	keyUserValueAuthzPath = []byte("authz_path")
-
-	// UserValueKeyFormPost is the User Value key where we indicate the form_post response mode.
-	UserValueKeyFormPost = []byte("form_post")
-
 	headerSeparator = []byte(", ")
 
 	contentTypeTextPlain       = []byte("text/plain; charset=utf-8")
 	contentTypeTextHTML        = []byte("text/html; charset=utf-8")
-	contentTypeApplicationJSON = []byte("application/json; charset=utf-8")
+	contentTypeApplicationJSON = []byte(ContentTypeApplicationJSON)
 	contentTypeApplicationYAML = []byte("application/yaml; charset=utf-8")
+)
+
+// bodyOpenIDConnectRateLimitExceeded is the JSON body returned by HandlerRateLimitOpenIDConnect. OAuth 2.0 has no
+// canonical rate-limit error code; temporarily_unavailable is borrowed from RFC 6749 §4.1.2.1 because its
+// "try again later" semantics align with rate limiting and clients tend to treat it as a retryable condition.
+var (
+	bodyOpenIDConnectRateLimitExceeded = []byte(`{"error":"temporarily_unavailable","error_description":"Too many requests. The endpoint is temporarily unavailable. Try again later."}`)
 )
 
 const (
 	headerValueXRequestedWithXHR = "XMLHttpRequest"
+
+	headerValueSecFetchModeNavigate = "navigate"
+	headerValueSecFetchDestDocument = "document"
 )
 
 var okMessageBytes = []byte("{\"status\":\"OK\"}")
 
-const (
-	messageOperationFailed                      = "Operation failed"
-	messageIdentityVerificationTokenAlreadyUsed = "The identity verification token has already been used"
-	messageIdentityVerificationTokenHasExpired  = "The identity verification token has expired"
+var (
+	messageOperationFailed                      = ErrorMessageOperationFailed
+	messageIdentityVerificationTokenAlreadyUsed = ErrorMessageIdentityTokenUsed
+	messageIdentityVerificationTokenHasExpired  = ErrorMessageIdentityTokenExpired
+	messageIdentityVerificationTokenNotValidYet = ErrorMessageIdentityTokenNotYetValid
+	messageIdentityVerificationTokenSig         = ErrorMessageIdentityTokenInvalidSignature
 )
 
 var protoHostSeparator = []byte("://")
 
 var errPasswordPolicyNoMet = errors.New("the supplied password does not met the security policy")
+
+var ipv6TranslationPrefix = &net.IPNet{IP: net.ParseIP("64:ff9b::"), Mask: net.CIDRMask(96, net.IPv6len*8)}

@@ -1,37 +1,45 @@
-import React from "react";
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
 
-import { Grid, Theme, Typography, useTheme } from "@mui/material";
-import makeStyles from "@mui/styles/makeStyles";
-import ReactLoading from "react-loading";
+import { cn } from "cn";
 
 export interface Props {
     message: string;
 }
 
-const BaseLoadingPage = function (props: Props) {
-    const theme = useTheme();
-    const styles = useStyles();
+const delays = [
+    "[animation-delay:0.1s]",
+    "[animation-delay:0.2s]",
+    "[animation-delay:0.3s]",
+    "[animation-delay:0.4s]",
+    "[animation-delay:0.5s]",
+];
 
+const BaseLoadingPage = function (props: Props) {
     return (
-        <Grid container className={styles.gridOuter}>
-            <Grid item className={styles.gridInner}>
-                <ReactLoading width={64} height={64} color={theme.custom.loadingBar} type="bars" />
-                <Typography>{props.message}...</Typography>
-            </Grid>
-        </Grid>
+        <div className="grid min-h-screen items-center justify-center">
+            <div className="inline-block text-center">
+                <div className="p-4">
+                    <span className="inline-flex">
+                        {delays.map((delay) => (
+                            <span
+                                key={delay}
+                                className={cn(
+                                    "mx-0.5 inline-block h-[35px] w-1 rounded-[2px]",
+                                    "bg-[var(--custom-loading-bar)] animate-scale-loader",
+                                    delay,
+                                )}
+                            />
+                        ))}
+                    </span>
+                </div>
+                <div className="p-4">
+                    <p>{props.message}...</p>
+                </div>
+            </div>
+        </div>
     );
 };
 
 export default BaseLoadingPage;
-
-const useStyles = makeStyles((theme: Theme) => ({
-    gridOuter: {
-        alignItems: "center",
-        justifyContent: "center",
-        minHeight: "100vh",
-    },
-    gridInner: {
-        textAlign: "center",
-        display: "inline-block",
-    },
-}));

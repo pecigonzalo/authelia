@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -20,8 +24,12 @@ func (s *CaddySuite) Test1FAScenario() {
 	suite.Run(s.T(), New1FAScenario())
 }
 
-func (s *CaddySuite) Test2FAScenario() {
-	suite.Run(s.T(), New2FAScenario())
+func (s *CaddySuite) TestAccessDeniedScenario() {
+	suite.Run(s.T(), NewAccessDeniedScenario())
+}
+
+func (s *CaddySuite) Test2FATOTPScenario() {
+	suite.Run(s.T(), New2FATOTPScenario())
 }
 
 func (s *CaddySuite) TestCustomHeaders() {
@@ -30,6 +38,10 @@ func (s *CaddySuite) TestCustomHeaders() {
 
 func (s *CaddySuite) TestResetPasswordScenario() {
 	suite.Run(s.T(), NewResetPasswordScenario())
+}
+
+func (s *CaddySuite) TestChangePasswordScenario() {
+	suite.Run(s.T(), NewChangePasswordScenario())
 }
 
 func TestCaddySuite(t *testing.T) {

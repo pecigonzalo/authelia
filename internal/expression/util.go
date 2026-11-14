@@ -1,0 +1,270 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package expression
+
+import (
+	"cel.dev/cel-go/cel"
+	"cel.dev/cel-go/common/types"
+	"cel.dev/cel-go/common/types/ref"
+	"cel.dev/cel-go/ext"
+)
+
+func optExtra(name string, attribute ExtraAttribute) (opt cel.EnvOption) {
+	var t *types.Type
+
+	switch attribute.GetValueType() {
+	case "string":
+		t = cel.StringType
+	case "integer":
+		t = cel.IntType
+	case "boolean":
+		t = cel.BoolType
+	default:
+		t = cel.DynType
+	}
+
+	if attribute.IsMultiValued() {
+		return cel.Variable(name, cel.ListType(t))
+	} else {
+		return cel.Variable(name, t)
+	}
+}
+
+func newAttributeUserUsername() cel.EnvOption {
+	return cel.Variable(AttributeUserUsername, cel.StringType)
+}
+
+func newAttributeUserGroups() cel.EnvOption {
+	return cel.Variable(AttributeUserGroups, cel.ListType(cel.StringType))
+}
+
+func newAttributeUserDisplayName() cel.EnvOption {
+	return cel.Variable(AttributeUserDisplayName, cel.StringType)
+}
+
+func newAttributeUserEmail() cel.EnvOption {
+	return cel.Variable(AttributeUserEmail, cel.StringType)
+}
+
+func newAttributeUserEmailVerified() cel.EnvOption {
+	return cel.Variable(AttributeUserEmailVerified, cel.BoolType)
+}
+
+func newAttributeUserEmails() cel.EnvOption {
+	return cel.Variable(AttributeUserEmails, cel.ListType(cel.StringType))
+}
+
+func newAttributeUserEmailsExtra() cel.EnvOption {
+	return cel.Variable(AttributeUserEmailsExtra, cel.ListType(cel.StringType))
+}
+
+func newAttributeUserGivenName() cel.EnvOption {
+	return cel.Variable(AttributeUserGivenName, cel.StringType)
+}
+
+func newAttributeUserMiddleName() cel.EnvOption {
+	return cel.Variable(AttributeUserMiddleName, cel.StringType)
+}
+
+func newAttributeUserFamilyName() cel.EnvOption {
+	return cel.Variable(AttributeUserFamilyName, cel.StringType)
+}
+
+func newAttributeUserNickname() cel.EnvOption {
+	return cel.Variable(AttributeUserNickname, cel.StringType)
+}
+
+func newAttributeUserProfile() cel.EnvOption {
+	return cel.Variable(AttributeUserProfile, cel.StringType)
+}
+
+func newAttributeUserPicture() cel.EnvOption {
+	return cel.Variable(AttributeUserPicture, cel.StringType)
+}
+
+func newAttributeUserWebsite() cel.EnvOption {
+	return cel.Variable(AttributeUserWebsite, cel.StringType)
+}
+
+func newAttributeUserGender() cel.EnvOption {
+	return cel.Variable(AttributeUserGender, cel.StringType)
+}
+
+func newAttributeUserBirthdate() cel.EnvOption {
+	return cel.Variable(AttributeUserBirthdate, cel.StringType)
+}
+
+func newAttributeUserZoneInfo() cel.EnvOption {
+	return cel.Variable(AttributeUserZoneInfo, cel.StringType)
+}
+
+func newAttributeUserLocale() cel.EnvOption {
+	return cel.Variable(AttributeUserLocale, cel.StringType)
+}
+
+func newAttributeUserPhoneNumber() cel.EnvOption {
+	return cel.Variable(AttributeUserPhoneNumber, cel.StringType)
+}
+
+func newAttributeUserPhoneNumberVerified() cel.EnvOption {
+	return cel.Variable(AttributeUserPhoneNumberVerified, cel.BoolType)
+}
+
+func newAttributeUserPhoneExtension() cel.EnvOption {
+	return cel.Variable(AttributeUserPhoneExtension, cel.StringType)
+}
+
+func newAttributeUserPhoneNumberRFC3966() cel.EnvOption {
+	return cel.Variable(AttributeUserPhoneNumberRFC3966, cel.StringType)
+}
+
+func newAttributeUserAddress() cel.EnvOption {
+	return cel.Variable(AttributeUserAddress, cel.MapType(cel.StringType, cel.StringType))
+}
+
+func newAttributeUserStreetAddress() cel.EnvOption {
+	return cel.Variable(AttributeUserStreetAddress, cel.StringType)
+}
+
+func newAttributeUserLocality() cel.EnvOption {
+	return cel.Variable(AttributeUserLocality, cel.StringType)
+}
+
+func newAttributeUserRegion() cel.EnvOption {
+	return cel.Variable(AttributeUserRegion, cel.StringType)
+}
+
+func newAttributeUserPostalCode() cel.EnvOption {
+	return cel.Variable(AttributeUserPostalCode, cel.StringType)
+}
+
+func newAttributeUserCountry() cel.EnvOption {
+	return cel.Variable(AttributeUserCountry, cel.StringType)
+}
+
+func newAttributeUpdatedAt() cel.EnvOption {
+	return cel.Variable(AttributeUserUpdatedAt, cel.IntType)
+}
+
+func newAttributeOAuth2AuthorizationRequestClaimValue() cel.EnvOption {
+	return cel.Variable(AttributeOpenIDAuthorizationRequestClaimValue, cel.DynType)
+}
+
+func newAttributeOAuth2AuthorizationRequestClaimValues() cel.EnvOption {
+	return cel.Variable(AttributeOpenIDAuthorizationRequestClaimValues, cel.ListType(cel.DynType))
+}
+
+// IsReservedAttribute returns true if the given attribute name is reserved.
+func IsReservedAttribute(key string) bool {
+	switch key {
+	case AttributeUserUsername, AttributeUserGroups, AttributeUserDisplayName, AttributeUserEmail, AttributeUserEmails,
+		AttributeUserEmailsExtra, AttributeUserEmailVerified, AttributeUserGivenName, AttributeUserMiddleName,
+		AttributeUserFamilyName, AttributeUserNickname, AttributeUserProfile, AttributeUserPicture,
+		AttributeUserWebsite, AttributeUserGender, AttributeUserBirthdate, AttributeUserZoneInfo, AttributeUserLocale,
+		AttributeUserPhoneNumber, AttributeUserPhoneNumberRFC3966, AttributeUserPhoneExtension,
+		AttributeUserPhoneNumberVerified, AttributeUserAddress, AttributeUserStreetAddress, AttributeUserLocality,
+		AttributeUserRegion, AttributeUserPostalCode, AttributeUserCountry, AttributeUserUpdatedAt,
+		AttributeOpenIDAuthorizationRequestClaimValue, AttributeOpenIDAuthorizationRequestClaimValues:
+		return true
+	default:
+		return false
+	}
+}
+
+func toNativeValue(in ref.Val) (out any) {
+	return toNativeValueUntyped(in.Value())
+}
+
+func toNativeValueUntyped(in any) (out any) {
+	switch val := in.(type) {
+	case ref.Val:
+		return toNativeValue(val)
+	case []ref.Val:
+		return toNativeValueSlice(val)
+	case map[ref.Val]ref.Val:
+		return toNativeValueRefValMap(val)
+	default:
+		return in
+	}
+}
+
+func toNativeValueString(in ref.Val) (out string) {
+	return in.ConvertToType(cel.StringType).Value().(string)
+}
+
+func toNativeValueSlice(in []ref.Val) (out []any) {
+	out = make([]any, len(in))
+
+	for i, v := range in {
+		out[i] = toNativeValue(v)
+	}
+
+	return out
+}
+
+func toNativeValueRefValMap(in map[ref.Val]ref.Val) (out map[string]any) {
+	out = make(map[string]any, len(in))
+
+	for k, v := range in {
+		out[toNativeValueString(k)] = toNativeValue(v)
+	}
+
+	return out
+}
+
+func withBaseCELEnvOpts(extra ...cel.EnvOption) (opts []cel.EnvOption) {
+	opts = make([]cel.EnvOption, 0, 8+len(extra))
+
+	opts = append(opts,
+		cel.OptionalTypes(),
+		ext.Lists(),
+		ext.Sets(),
+		ext.Strings(),
+		ext.Bindings(),
+		ext.Math(),
+		ext.Encoders(),
+		ext.Regex(),
+	)
+
+	opts = append(opts, extra...)
+
+	return opts
+}
+
+func getStandardCELEnvOpts() []cel.EnvOption {
+	return withBaseCELEnvOpts(
+		newAttributeUserUsername(),
+		newAttributeUserGroups(),
+		newAttributeUserDisplayName(),
+		newAttributeUserEmail(),
+		newAttributeUserEmailVerified(),
+		newAttributeUserEmails(),
+		newAttributeUserEmailsExtra(),
+		newAttributeUserGivenName(),
+		newAttributeUserMiddleName(),
+		newAttributeUserFamilyName(),
+		newAttributeUserNickname(),
+		newAttributeUserProfile(),
+		newAttributeUserPicture(),
+		newAttributeUserWebsite(),
+		newAttributeUserGender(),
+		newAttributeUserBirthdate(),
+		newAttributeUserZoneInfo(),
+		newAttributeUserLocale(),
+		newAttributeUserPhoneNumber(),
+		newAttributeUserPhoneNumberVerified(),
+		newAttributeUserPhoneExtension(),
+		newAttributeUserPhoneNumberRFC3966(),
+		newAttributeUserAddress(),
+		newAttributeUserStreetAddress(),
+		newAttributeUserLocality(),
+		newAttributeUserRegion(),
+		newAttributeUserPostalCode(),
+		newAttributeUserCountry(),
+		newAttributeUpdatedAt(),
+		newAttributeOAuth2AuthorizationRequestClaimValue(),
+		newAttributeOAuth2AuthorizationRequestClaimValues(),
+	)
+}

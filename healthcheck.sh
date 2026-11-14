@@ -1,6 +1,11 @@
 #!/bin/sh
 
-source /app/.healthcheck.env
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# shellcheck source=/dev/null
+. /app/.healthcheck.env
 
 if [ -z "${X_AUTHELIA_HEALTHCHECK}" ]; then
   exit 0

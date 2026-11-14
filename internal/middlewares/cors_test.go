@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package middlewares
 
 import (
@@ -56,13 +60,13 @@ func TestCORSPolicyBuilder_WithAllowedMethods(t *testing.T) {
 
 	assert.Nil(t, cors.methods)
 
-	cors.WithAllowedMethods("GET")
+	cors.WithAllowedMethods(fasthttp.MethodGet)
 
-	assert.Equal(t, []string{"GET"}, cors.methods)
+	assert.Equal(t, []string{fasthttp.MethodGet}, cors.methods)
 
-	cors.WithAllowedMethods("POST", "PATCH")
+	cors.WithAllowedMethods(fasthttp.MethodPost, fasthttp.MethodPatch)
 
-	assert.Equal(t, []string{"POST", "PATCH"}, cors.methods)
+	assert.Equal(t, []string{fasthttp.MethodPost, fasthttp.MethodPatch}, cors.methods)
 
 	cors.WithAllowedMethods()
 
@@ -140,12 +144,169 @@ func TestCORSPolicyBuilder_WithMaxAge(t *testing.T) {
 }
 
 func TestCORSPolicyBuilder_HandleOPTIONS(t *testing.T) {
+	testCases := []struct {
+		name                        string
+		enabled                     bool
+		methods                     []string
+		headers                     []string
+		origins                     []string
+		vary                        []string
+		varyOnly                    bool
+		maxage                      int
+		requestMethod               string
+		requestHeaderOrigin         string
+		requestHeaderACRM           string
+		requestHeaderACRH           string
+		expectedStatus              int
+		expectedHeaderContentLength any
+		expectedHeaderVary          any
+		expectedHeaderACAO          any
+		expectedHeaderACAM          any
+		expectedHeaderACAH          any
+		expectedHeaderACAC          any
+		expectedHeaderACMA          any
+	}{
+		{
+			name:                        "ShouldHandleWildcardPreflight",
+			enabled:                     true,
+			methods:                     []string{fasthttp.MethodGet, fasthttp.MethodOptions},
+			headers:                     nil,
+			origins:                     []string{"*"},
+			vary:                        nil,
+			varyOnly:                    false,
+			maxage:                      0,
+			requestMethod:               fasthttp.MethodOptions,
+			requestHeaderOrigin:         "https://myapp.example.com",
+			requestHeaderACRM:           fasthttp.MethodGet,
+			requestHeaderACRH:           "X-Example-Header",
+			expectedStatus:              fasthttp.StatusOK,
+			expectedHeaderContentLength: []byte("0"),
+			expectedHeaderVary:          []byte(nil),
+			expectedHeaderACAO:          []byte("*"),
+			expectedHeaderACAM:          []byte("GET, OPTIONS"),
+			expectedHeaderACAH:          []byte("X-Example-Header"),
+			expectedHeaderACAC:          []byte("false"),
+			expectedHeaderACMA:          []byte("100"),
+		},
+		{
+			name:                        "ShouldHandleWildcard",
+			enabled:                     true,
+			methods:                     []string{fasthttp.MethodGet, fasthttp.MethodOptions},
+			headers:                     nil,
+			origins:                     []string{"*"},
+			vary:                        nil,
+			varyOnly:                    false,
+			maxage:                      0,
+			requestMethod:               fasthttp.MethodGet,
+			requestHeaderOrigin:         "https://myapp.example.com",
+			requestHeaderACRM:           "",
+			requestHeaderACRH:           "",
+			expectedStatus:              fasthttp.StatusOK,
+			expectedHeaderContentLength: []byte("0"),
+			expectedHeaderVary:          []byte(nil),
+			expectedHeaderACAO:          []byte("*"),
+			expectedHeaderACAM:          []byte("GET, OPTIONS"),
+			expectedHeaderACAH:          []byte(nil),
+			expectedHeaderACAC:          []byte("false"),
+			expectedHeaderACMA:          []byte("100"),
+		},
+		{
+			name:                        "ShouldHandleNonPreflight",
+			enabled:                     true,
+			methods:                     []string{fasthttp.MethodGet, fasthttp.MethodOptions},
+			headers:                     nil,
+			origins:                     []string{"*"},
+			vary:                        nil,
+			varyOnly:                    false,
+			maxage:                      0,
+			requestMethod:               fasthttp.MethodOptions,
+			requestHeaderOrigin:         "",
+			requestHeaderACRM:           "",
+			requestHeaderACRH:           "X-Example-Header",
+			expectedStatus:              fasthttp.StatusOK,
+			expectedHeaderContentLength: []byte("0"),
+			expectedHeaderVary:          []byte(nil),
+			expectedHeaderACAO:          []byte(nil),
+			expectedHeaderACAM:          []byte(nil),
+			expectedHeaderACAH:          []byte(nil),
+			expectedHeaderACAC:          []byte(nil),
+			expectedHeaderACMA:          []byte(nil),
+		},
+		{
+			name:                        "ShouldHandleCORSRequest",
+			enabled:                     true,
+			methods:                     []string{fasthttp.MethodGet, fasthttp.MethodOptions},
+			headers:                     nil,
+			origins:                     []string{"*"},
+			vary:                        nil,
+			varyOnly:                    false,
+			maxage:                      0,
+			requestMethod:               fasthttp.MethodGet,
+			requestHeaderOrigin:         "https://app.example.com",
+			requestHeaderACRM:           "",
+			requestHeaderACRH:           "X-Example-Header",
+			expectedStatus:              fasthttp.StatusOK,
+			expectedHeaderContentLength: []byte("0"),
+			expectedHeaderVary:          []byte(nil),
+			expectedHeaderACAO:          []byte("*"),
+			expectedHeaderACAM:          []byte("GET, OPTIONS"),
+			expectedHeaderACAH:          []byte("X-Example-Header"),
+			expectedHeaderACAC:          []byte("false"),
+			expectedHeaderACMA:          []byte("100"),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := newFastHTTPRequestCtx()
+
+			if len(tc.requestMethod) != 0 {
+				ctx.Request.Header.SetMethod(tc.requestMethod)
+			}
+
+			if len(tc.requestHeaderOrigin) != 0 {
+				ctx.Request.Header.SetBytesK(headerOrigin, tc.requestHeaderOrigin)
+			}
+
+			if len(tc.requestHeaderACRM) != 0 {
+				ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, tc.requestHeaderACRM)
+			}
+
+			if len(tc.requestHeaderACRH) != 0 {
+				ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, tc.requestHeaderACRH)
+			}
+
+			NewCORSPolicyBuilder().
+				WithEnabled(tc.enabled).
+				WithAllowedMethods(tc.methods...).
+				WithAllowedHeaders(tc.headers...).
+				WithAllowedOrigins(tc.origins...).
+				WithVary(tc.vary...).
+				WithVaryOnly(tc.varyOnly).
+				WithMaxAge(tc.maxage).
+				Build().
+				HandleOPTIONS(ctx)
+
+			assert.Equal(t, tc.expectedStatus, ctx.Response.StatusCode())
+			assert.Equal(t, tc.expectedHeaderContentLength, ctx.Response.Header.PeekBytes(headerContentLength))
+			assert.Equal(t, tc.expectedHeaderVary, ctx.Response.Header.PeekBytes(headerVary))
+			assert.Equal(t, tc.expectedHeaderACAO, ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
+			assert.Equal(t, tc.expectedHeaderACAC, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
+			assert.Equal(t, tc.expectedHeaderACAH, ctx.Response.Header.PeekBytes(headerAccessControlAllowHeaders))
+			assert.Equal(t, tc.expectedHeaderACAM, ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
+			assert.Equal(t, tc.expectedHeaderACMA, ctx.Response.Header.PeekBytes(headerAccessControlMaxAge))
+		})
+	}
+}
+
+func TestCORSPolicyBuilder_HandleOPTIONS_TODO_Legacy_Replace(t *testing.T) {
 	ctx := newFastHTTPRequestCtx()
 
 	origin := []byte("https://myapp.example.com")
 
-	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
 
 	cors := NewCORSPolicyBuilder()
 	policy := cors.Build()
@@ -154,27 +315,28 @@ func TestCORSPolicyBuilder_HandleOPTIONS(t *testing.T) {
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAllow))
+	assert.Equal(t, []byte(fasthttp.MethodGet), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, origin, ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, headerValueFalse, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
 	assert.Equal(t, headerValueMaxAge, ctx.Response.Header.PeekBytes(headerAccessControlMaxAge))
 	assert.Equal(t, []byte("X-Example-Header"), ctx.Response.Header.PeekBytes(headerAccessControlAllowHeaders))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
+	assert.Equal(t, []byte(fasthttp.MethodGet), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 
 	ctx = newFastHTTPRequestCtx()
 
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 
-	cors.WithAllowedMethods("GET", "OPTIONS")
+	cors.WithAllowedMethods(fasthttp.MethodGet, fasthttp.MethodOptions)
 
 	policy = cors.Build()
 	policy.HandleOPTIONS(ctx)
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAllow))
+	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, origin, ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, headerValueFalse, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
@@ -192,13 +354,12 @@ func TestCORSPolicyBuilder_HandleOPTIONS(t *testing.T) {
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAllow))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlMaxAge))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowHeaders))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
+	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 
 	ctx = newFastHTTPRequestCtx()
 
@@ -212,13 +373,12 @@ func TestCORSPolicyBuilder_HandleOPTIONS(t *testing.T) {
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAllow))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlMaxAge))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowHeaders))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
+	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 }
 
 func TestCORSPolicyBuilder_HandleOPTIONS_WithoutOrigin(t *testing.T) {
@@ -233,7 +393,7 @@ func TestCORSPolicyBuilder_HandleOPTIONS_WithoutOrigin(t *testing.T) {
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAllow))
+	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
@@ -245,14 +405,13 @@ func TestCORSPolicyBuilder_HandleOPTIONS_WithoutOrigin(t *testing.T) {
 
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
 
-	cors.WithAllowedMethods("GET", "OPTIONS")
+	cors.WithAllowedMethods(fasthttp.MethodGet, fasthttp.MethodOptions)
 
 	policy = cors.Build()
 	policy.HandleOPTIONS(ctx)
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAllow))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
@@ -267,6 +426,7 @@ func TestCORSPolicyBuilder_HandleOPTIONSWithAllowedOrigins(t *testing.T) {
 	origin := []byte("https://myapp.example.com")
 
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 
 	cors := NewCORSPolicyBuilder()
@@ -277,16 +437,15 @@ func TestCORSPolicyBuilder_HandleOPTIONSWithAllowedOrigins(t *testing.T) {
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAllow))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, origin, ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, headerValueFalse, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
 	assert.Equal(t, headerValueMaxAge, ctx.Response.Header.PeekBytes(headerAccessControlMaxAge))
 	assert.Equal(t, []byte("X-Example-Header"), ctx.Response.Header.PeekBytes(headerAccessControlAllowHeaders))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
+	assert.Equal(t, []byte(fasthttp.MethodGet), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 
 	ctx = newFastHTTPRequestCtx()
-
+	ctx.Request.Header.SetMethod(fasthttp.MethodOptions)
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 
@@ -297,7 +456,7 @@ func TestCORSPolicyBuilder_HandleOPTIONSWithAllowedOrigins(t *testing.T) {
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAllow))
+	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
@@ -308,17 +467,18 @@ func TestCORSPolicyBuilder_HandleOPTIONSWithAllowedOrigins(t *testing.T) {
 	ctx = newFastHTTPRequestCtx()
 
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 
 	cors.WithAllowedOrigins("*")
-	cors.WithAllowedMethods("GET", "OPTIONS")
+	cors.WithAllowedMethods(fasthttp.MethodGet, fasthttp.MethodOptions)
 
 	policy = cors.Build()
 	policy.HandleOPTIONS(ctx)
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAllow))
+	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 	assert.Equal(t, []byte("Accept-Encoding"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, headerValueOriginWildcard, ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, headerValueFalse, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
@@ -333,6 +493,7 @@ func TestCORSPolicyBuilder_WithAllowedOrigins_DoesntOverrideVary(t *testing.T) {
 	origin := []byte("https://myapp.example.com")
 
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 
 	cors := NewCORSPolicyBuilder()
@@ -344,13 +505,12 @@ func TestCORSPolicyBuilder_WithAllowedOrigins_DoesntOverrideVary(t *testing.T) {
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAllow))
 	assert.Equal(t, []byte("Accept-Encoding, Origin, Test"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, headerValueOriginWildcard, ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, headerValueFalse, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
 	assert.Equal(t, headerValueMaxAge, ctx.Response.Header.PeekBytes(headerAccessControlMaxAge))
 	assert.Equal(t, []byte("X-Example-Header"), ctx.Response.Header.PeekBytes(headerAccessControlAllowHeaders))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
+	assert.Equal(t, []byte(fasthttp.MethodGet), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 }
 
 func TestCORSPolicyBuilder_HandleOPTIONSWithVaryOnly(t *testing.T) {
@@ -370,7 +530,7 @@ func TestCORSPolicyBuilder_HandleOPTIONSWithVaryOnly(t *testing.T) {
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAllow))
+	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
@@ -383,20 +543,19 @@ func TestCORSPolicyBuilder_HandleOPTIONSWithVaryOnly(t *testing.T) {
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 
-	cors.WithAllowedMethods("GET", "OPTIONS")
+	cors.WithAllowedMethods(fasthttp.MethodGet, fasthttp.MethodOptions)
 
 	policy = cors.Build()
 	policy.HandleOPTIONS(ctx)
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAllow))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlMaxAge))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowHeaders))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
+	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 }
 
 func TestCORSPolicyBuilder_HandleOPTIONSWithAllowedHeaders(t *testing.T) {
@@ -405,6 +564,7 @@ func TestCORSPolicyBuilder_HandleOPTIONSWithAllowedHeaders(t *testing.T) {
 	origin := []byte("https://myapp.example.com")
 
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 
 	cors := NewCORSPolicyBuilder()
@@ -416,27 +576,27 @@ func TestCORSPolicyBuilder_HandleOPTIONSWithAllowedHeaders(t *testing.T) {
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAllow))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, origin, ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, headerValueFalse, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
 	assert.Equal(t, headerValueMaxAge, ctx.Response.Header.PeekBytes(headerAccessControlMaxAge))
 	assert.Equal(t, []byte("Example, Test"), ctx.Response.Header.PeekBytes(headerAccessControlAllowHeaders))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
+	assert.Equal(t, []byte(fasthttp.MethodGet), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 
 	ctx = newFastHTTPRequestCtx()
 
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 
-	cors.WithAllowedMethods("GET", "OPTIONS")
+	cors.WithAllowedMethods(fasthttp.MethodGet, fasthttp.MethodOptions)
 
 	policy = cors.Build()
 	policy.HandleOPTIONS(ctx)
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAllow))
+	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, origin, ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, headerValueFalse, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
@@ -447,6 +607,7 @@ func TestCORSPolicyBuilder_HandleOPTIONSWithAllowedHeaders(t *testing.T) {
 	ctx = newFastHTTPRequestCtx()
 
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 
 	cors.WithAllowCredentials(true)
@@ -456,7 +617,7 @@ func TestCORSPolicyBuilder_HandleOPTIONSWithAllowedHeaders(t *testing.T) {
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAllow))
+	assert.Equal(t, []byte("GET, OPTIONS"), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, origin, ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, headerValueTrue, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
@@ -471,6 +632,7 @@ func TestCORSPolicyBuilder_HandleOPTIONS_ShouldNotAllowWildcardInRequestedHeader
 	origin := []byte("https://myapp.example.com")
 
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "*")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 
 	cors := NewCORSPolicyBuilder()
@@ -480,13 +642,12 @@ func TestCORSPolicyBuilder_HandleOPTIONS_ShouldNotAllowWildcardInRequestedHeader
 
 	assert.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
 	assert.Equal(t, headerValueZero, ctx.Response.Header.PeekBytes(headerContentLength))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAllow))
 	assert.Equal(t, []byte("Accept-Encoding, Origin"), ctx.Response.Header.PeekBytes(headerVary))
 	assert.Equal(t, origin, ctx.Response.Header.PeekBytes(headerAccessControlAllowOrigin))
 	assert.Equal(t, headerValueFalse, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
 	assert.Equal(t, headerValueMaxAge, ctx.Response.Header.PeekBytes(headerAccessControlMaxAge))
 	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowHeaders))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
+	assert.Equal(t, []byte(fasthttp.MethodGet), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 }
 
 func Test_CORSApplyAutomaticAllowAllPolicy_WithoutRequestMethod(t *testing.T) {
@@ -495,6 +656,7 @@ func Test_CORSApplyAutomaticAllowAllPolicy_WithoutRequestMethod(t *testing.T) {
 	origin := []byte("https://myapp.example.com")
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 
 	cors := NewCORSPolicyBuilder()
 
@@ -506,7 +668,7 @@ func Test_CORSApplyAutomaticAllowAllPolicy_WithoutRequestMethod(t *testing.T) {
 	assert.Equal(t, headerValueFalse, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
 	assert.Equal(t, headerValueMaxAge, ctx.Response.Header.PeekBytes(headerAccessControlMaxAge))
 	assert.Equal(t, []byte("X-Example-Header"), ctx.Response.Header.PeekBytes(headerAccessControlAllowHeaders))
-	assert.Equal(t, []byte(nil), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
+	assert.Equal(t, []byte(fasthttp.MethodGet), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 }
 
 func Test_CORSApplyAutomaticAllowAllPolicy_WithRequestMethod(t *testing.T) {
@@ -516,7 +678,7 @@ func Test_CORSApplyAutomaticAllowAllPolicy_WithRequestMethod(t *testing.T) {
 
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
-	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, "GET")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 
 	cors := NewCORSPolicyBuilder()
 
@@ -528,7 +690,7 @@ func Test_CORSApplyAutomaticAllowAllPolicy_WithRequestMethod(t *testing.T) {
 	assert.Equal(t, headerValueFalse, ctx.Response.Header.PeekBytes(headerAccessControlAllowCredentials))
 	assert.Equal(t, headerValueMaxAge, ctx.Response.Header.PeekBytes(headerAccessControlMaxAge))
 	assert.Equal(t, []byte("X-Example-Header"), ctx.Response.Header.PeekBytes(headerAccessControlAllowHeaders))
-	assert.Equal(t, []byte("GET"), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
+	assert.Equal(t, []byte(fasthttp.MethodGet), ctx.Response.Header.PeekBytes(headerAccessControlAllowMethods))
 }
 
 func Test_CORSApplyAutomaticAllowAllPolicy_ShouldNotModifyFotNonHTTPSRequests(t *testing.T) {
@@ -538,7 +700,7 @@ func Test_CORSApplyAutomaticAllowAllPolicy_ShouldNotModifyFotNonHTTPSRequests(t 
 
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
-	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, "GET")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 
 	cors := NewCORSPolicyBuilder().WithVary()
 
@@ -560,11 +722,11 @@ func Test_CORSMiddleware_AsMiddleware(t *testing.T) {
 
 	ctx.Request.Header.SetBytesKV(headerOrigin, origin)
 	ctx.Request.Header.SetBytesK(headerAccessControlRequestHeaders, "X-Example-Header")
-	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, "GET")
+	ctx.Request.Header.SetBytesK(headerAccessControlRequestMethod, fasthttp.MethodGet)
 
 	middleware := NewBridgeBuilder(schema.Configuration{}, Providers{}).Build()
 
-	cors := NewCORSPolicyBuilder().WithAllowedMethods("GET", "OPTIONS")
+	cors := NewCORSPolicyBuilder().WithAllowedMethods(fasthttp.MethodGet, fasthttp.MethodOptions)
 
 	policy := cors.Build()
 

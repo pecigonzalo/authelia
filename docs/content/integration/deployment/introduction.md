@@ -1,0 +1,33 @@
+---
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+title: "Deployment"
+description: "An introduction to deploying Authelia covering the three main methods of Docker containers, Kubernetes clusters, and bare-metal with getting started guidance."
+summary: "An introduction into integrating Authelia within your architecture."
+date: 2024-03-14T06:00:14+11:00
+draft: false
+images: []
+weight: 210
+toc: true
+aliases:
+  - '/docs/deployment/'
+seo:
+  title: "" # custom title (optional)
+  description: "" # custom description (recommended)
+  canonical: "" # custom canonical URL (optional)
+  noindex: false # false (default) or true
+---
+
+There are three main methods to deploy _Authelia_.
+
+1. [Docker](docker.md)
+2. [Kubernetes](../kubernetes/introduction.md)
+3. [Bare-Metal](bare-metal.md)
+
+## Get started
+
+It's **_strongly recommended_** that users setting up _Authelia_ for the first time take a look at our
+[Get started](../prologue/get-started.md) guide. This takes you through various steps which are essential to
+bootstrapping _Authelia_.

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package validator
 
 import (
@@ -36,7 +40,7 @@ func (suite *Theme) TestShouldRaiseErrorWhenInvalidThemeProvided() {
 	suite.Assert().Len(suite.validator.Warnings(), 0)
 	suite.Require().Len(suite.validator.Errors(), 1)
 
-	suite.Assert().EqualError(suite.validator.Errors()[0], "option 'theme' must be one of 'light', 'dark', 'grey', 'auto' but it is configured as 'invalid'")
+	suite.Assert().EqualError(suite.validator.Errors()[0], "option 'theme' must be one of 'light', 'dark', 'grey', 'oled', or 'auto' but it's configured as 'invalid'")
 }
 
 func TestThemes(t *testing.T) {

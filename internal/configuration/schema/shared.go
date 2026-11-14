@@ -1,36 +1,43 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package schema
 
 import (
 	"time"
 )
 
-// TLSConfig is a representation of the TLS configuration.
-type TLSConfig struct {
-	MinimumVersion TLSVersion `koanf:"minimum_version"`
-	MaximumVersion TLSVersion `koanf:"maximum_version"`
+// TLS is a representation of the TLS configuration.
+type TLS struct {
+	MinimumVersion TLSVersion `koanf:"minimum_version" yaml:"minimum_version,omitempty" toml:"minimum_version,omitempty" json:"minimum_version,omitempty" jsonschema:"default=TLS1.2,title=Minimum Version" jsonschema_description:"The minimum TLS version accepted."`
+	MaximumVersion TLSVersion `koanf:"maximum_version" yaml:"maximum_version,omitempty" toml:"maximum_version,omitempty" json:"maximum_version,omitempty" jsonschema:"default=TLS1.3,title=Maximum Version" jsonschema_description:"The maximum TLS version accepted."`
 
-	SkipVerify bool   `koanf:"skip_verify"`
-	ServerName string `koanf:"server_name"`
+	SkipVerify bool   `koanf:"skip_verify" yaml:"skip_verify" toml:"skip_verify" json:"skip_verify" jsonschema:"default=false,title=Skip Verify" jsonschema_description:"Disable all verification of the TLS properties."`
+	ServerName string `koanf:"server_name" yaml:"server_name,omitempty" toml:"server_name,omitempty" json:"server_name,omitempty" jsonschema:"format=hostname,title=Server Name" jsonschema_description:"The expected server name to match the certificate against."`
 
-	PrivateKey       CryptographicPrivateKey `koanf:"private_key"`
-	CertificateChain X509CertificateChain    `koanf:"certificate_chain"`
-}
-
-// TLSCertificateConfig is a representation of the TLS Certificate configuration.
-type TLSCertificateConfig struct {
-	Key              CryptographicPrivateKey `koanf:"key"`
-	CertificateChain X509CertificateChain    `koanf:"certificate_chain"`
+	PrivateKey       CryptographicPrivateKey `koanf:"private_key" yaml:"private_key,omitempty" toml:"private_key,omitempty" json:"private_key,omitempty" jsonschema:"title=Private Key" jsonschema_description:"The private key."`
+	CertificateChain X509CertificateChain    `koanf:"certificate_chain" yaml:"certificate_chain,omitempty" toml:"certificate_chain,omitempty" json:"certificate_chain,omitempty" jsonschema:"title=Certificate Chain" jsonschema_description:"The certificate chain."`
 }
 
 // ServerTimeouts represents server timeout configurations.
 type ServerTimeouts struct {
-	Read  time.Duration `koanf:"read"`
-	Write time.Duration `koanf:"write"`
-	Idle  time.Duration `koanf:"idle"`
+	Read  time.Duration `koanf:"read" yaml:"read,omitempty" toml:"read,omitempty" json:"read,omitempty" jsonschema:"default=6 seconds,title=Read" jsonschema_description:"The read timeout."`
+	Write time.Duration `koanf:"write" yaml:"write,omitempty" toml:"write,omitempty" json:"write,omitempty" jsonschema:"default=6 seconds,title=Write" jsonschema_description:"The write timeout."`
+	Idle  time.Duration `koanf:"idle" yaml:"idle,omitempty" toml:"idle,omitempty" json:"idle,omitempty" jsonschema:"default=30 seconds,title=Idle" jsonschema_description:"The idle timeout."`
 }
 
 // ServerBuffers represents server buffer configurations.
 type ServerBuffers struct {
-	Read  int `koanf:"read"`
-	Write int `koanf:"write"`
+	Read  int `koanf:"read" yaml:"read" toml:"read" json:"read" jsonschema:"default=4096,title=Read" jsonschema_description:"The read buffer size."`
+	Write int `koanf:"write" yaml:"write" toml:"write" json:"write" jsonschema:"default=4096,title=Write" jsonschema_description:"The write buffer size."`
+}
+
+// JWK represents a JWK.
+type JWK struct {
+	KeyID            string               `koanf:"key_id" yaml:"key_id,omitempty" toml:"key_id,omitempty" json:"key_id,omitempty" jsonschema:"maxLength=100,title=Key ID" jsonschema_description:"The ID of this JWK."`
+	Use              string               `koanf:"use" yaml:"use,omitempty" toml:"use,omitempty" json:"use,omitempty" jsonschema:"default=sig,enum=sig,title=Use" jsonschema_description:"The Use of this JWK."`
+	Algorithm        string               `koanf:"algorithm" yaml:"algorithm,omitempty" toml:"algorithm,omitempty" json:"algorithm,omitempty" jsonschema:"enum=HS256,enum=HS384,enum=HS512,enum=RS256,enum=RS384,enum=RS512,enum=ES256,enum=ES384,enum=ES512,enum=PS256,enum=PS384,enum=PS512,enum=Ed25519,enum=EdDSA,enum=ML-DSA-44,enum=ML-DSA-65,enum=ML-DSA-87,title=Algorithm" jsonschema_description:"The Algorithm of this JWK. The Edwards-curve identifier 'EdDSA' is also accepted for compatibility with RFC 8037, however RFC 9864 deprecates it in favor of 'Ed25519' which is recommended instead."`
+	Key              CryptographicKey     `koanf:"key" yaml:"key,omitempty" toml:"key,omitempty" json:"key,omitempty" jsonschema:"title=Key" jsonschema_description:"The Private/Public key material of this JWK in Base64 PEM format."`
+	CertificateChain X509CertificateChain `koanf:"certificate_chain" yaml:"certificate_chain,omitempty" toml:"certificate_chain,omitempty" json:"certificate_chain,omitempty" jsonschema:"title=Certificate Chain" jsonschema_description:"The optional associated certificate which matches the Key public key portion for this JWK."`
 }

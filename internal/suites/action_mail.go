@@ -1,34 +1,245 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
+	"io"
+	"net/http"
 	"testing"
+	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/valyala/fasthttp"
+	"golang.org/x/net/html"
+
+	"github.com/authelia/authelia/v4/internal/utils"
 )
 
-type message struct {
-	ID int `json:"id"`
+const (
+	emailPollInterval = time.Millisecond * 100
+	emailPollTimeout  = time.Second * 5
+)
+
+// EmailMessagesResponse represents the response from the mail server messages endpoint.
+type EmailMessagesResponse struct {
+	Total         int            `json:"total"`
+	Unread        int            `json:"unread"`
+	Count         int            `json:"count"`
+	MessagesCount int            `json:"messages_count"`
+	Start         int            `json:"start"`
+	Tags          []string       `json:"tags"`
+	Messages      []EmailMessage `json:"messages"`
 }
 
-func doGetLinkFromLastMail(t *testing.T) string {
-	res := doHTTPGetQuery(t, fmt.Sprintf("%s/messages", MailBaseURL))
-	messages := make([]message, 0)
-	err := json.Unmarshal(res, &messages)
-	assert.NoError(t, err)
-	assert.Greater(t, len(messages), 0)
+// EmailMessage represents a single message from the mail server.
+type EmailMessage struct {
+	ID          string    `json:"ID"`
+	MessageID   string    `json:"MessageID"`
+	Read        bool      `json:"Read"`
+	From        Address   `json:"From"`
+	To          []Address `json:"To"`
+	Cc          []Address `json:"Cc"`
+	Bcc         []Address `json:"Bcc"`
+	ReplyTo     []Address `json:"ReplyTo"`
+	Subject     string    `json:"Subject"`
+	Created     time.Time `json:"Created"`
+	Tags        []string  `json:"Tags"`
+	Size        int       `json:"Size"`
+	Attachments int       `json:"Attachments"`
+	Snippet     string    `json:"Snippet"`
+}
 
-	messageID := messages[len(messages)-1].ID
+// Address represents an email address of an EmailMessage.
+type Address struct {
+	Name    string `json:"Name"`
+	Address string `json:"Address"`
+}
 
-	res = doHTTPGetQuery(t, fmt.Sprintf("%s/messages/%d.html", MailBaseURL, messageID))
+// GetContentReader returns a reader for the HTML content of this message.
+func (m *EmailMessage) GetContentReader() (reader io.ReadCloser, err error) {
+	client := NewHTTPClient()
 
-	re := regexp.MustCompile(`<a href="(.+)" class="button">.*<\/a>`)
-	matches := re.FindStringSubmatch(string(res))
+	req, err := http.NewRequest(fasthttp.MethodGet, fmt.Sprintf("%s/view/%s.html", MailBaseURL, m.ID), nil)
+	if err != nil {
+		return nil, err
+	}
 
-	require.Len(t, matches, 2, "Number of match for link in email is not equal to one")
+	req.Header.Add(fasthttp.HeaderAccept, "application/json")
 
-	return matches[1]
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Body, nil
+}
+
+// GetContent returns the HTML content of this message.
+func (m *EmailMessage) GetContent() (content []byte, err error) {
+	reader, err := m.GetContentReader()
+
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	content, _ = io.ReadAll(reader)
+
+	return content, nil
+}
+
+func getHTMLNodeAttr(n *html.Node, key string) (value string, ok bool) {
+	for _, attr := range n.Attr {
+		if attr.Key == key {
+			return attr.Val, true
+		}
+	}
+
+	return "", false
+}
+
+func getHTMLNodeHasID(n *html.Node, id string) bool {
+	if n.Type == html.ElementNode {
+		value, ok := getHTMLNodeAttr(n, "id")
+		if ok && value == id {
+			return true
+		}
+	}
+
+	return false
+}
+
+func getHTMLNodeWithID(n *html.Node, id string) (found *html.Node) {
+	if getHTMLNodeHasID(n, id) {
+		return n
+	}
+
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		found = getHTMLNodeWithID(c, id)
+		if found != nil {
+			return found
+		}
+	}
+
+	return nil
+}
+
+func doGetEmailNodeID(t *testing.T, subject, id string) (node *html.Node) {
+	t.Helper()
+
+	msg := doGetLastEmailMessageWithSubject(t, subject)
+
+	reader, err := msg.GetContentReader()
+	require.NoError(t, err)
+
+	defer reader.Close()
+
+	node, err = html.Parse(reader)
+	require.NoError(t, err)
+
+	return getHTMLNodeWithID(node, id)
+}
+
+func doGetOneTimeCodeFromLastMail(t *testing.T) string {
+	t.Helper()
+
+	element := doGetEmailNodeID(t, "[Authelia] Confirm your identity", "one-time-code")
+
+	require.NotNil(t, element)
+	require.NotNil(t, element.FirstChild)
+	require.NotNil(t, element.LastChild)
+	require.Equal(t, element.FirstChild, element.LastChild)
+
+	return element.FirstChild.Data
+}
+
+//nolint:unused
+func doGetOneTimeCodeLinkRevokeFromLastMail(t *testing.T) string {
+	t.Helper()
+
+	element := doGetEmailNodeID(t, "[Authelia] Confirm your identity", "link-revoke")
+
+	require.NotNil(t, element)
+
+	return doGetNodeAttribute(t, element, "href")
+}
+
+func doGetResetPasswordJWTLinkFromLastEmail(t *testing.T) string {
+	t.Helper()
+
+	element := doGetEmailNodeID(t, "[Authelia] Reset your password", "link")
+
+	require.NotNil(t, element)
+
+	return doGetNodeAttribute(t, element, "href")
+}
+
+//nolint:unused
+func doGetResetPasswordJWTLinkRevokeFromLastEmail(t *testing.T) string {
+	t.Helper()
+
+	element := doGetEmailNodeID(t, "[Authelia] Reset your password", "link-revoke")
+
+	require.NotNil(t, element)
+
+	return doGetNodeAttribute(t, element, "href")
+}
+
+func doGetNodeAttribute(t *testing.T, node *html.Node, key string) string {
+	t.Helper()
+
+	for _, attr := range node.Attr {
+		if attr.Key != key {
+			continue
+		}
+
+		return attr.Val
+	}
+
+	require.Fail(t, fmt.Sprintf("Attribute '%s' Not Found On Node", key))
+
+	return ""
+}
+
+func doGetLastEmailMessageWithSubject(t *testing.T, subject string) (message EmailMessage) {
+	t.Helper()
+
+	err := utils.CheckUntil(emailPollInterval, emailPollTimeout, func() (bool, error) {
+		messages, err := doGetEmailMessages()
+		if err != nil {
+			return false, nil
+		}
+
+		for i := len(messages) - 1; i >= 0; i-- {
+			if subject == messages[i].Subject && !messages[i].Read {
+				message = messages[i]
+
+				return true, nil
+			}
+		}
+
+		return false, nil
+	})
+
+	require.NoError(t, err, "Didn't find the message with subject '%s'.", subject)
+
+	return message
+}
+
+func doGetEmailMessages() (messages []EmailMessage, err error) {
+	var emr EmailMessagesResponse
+
+	res, err := doHTTPGetQuery(fmt.Sprintf("%s/api/v1/messages", MailBaseURL))
+	if err != nil {
+		return nil, err
+	}
+
+	if err = json.Unmarshal(res, &emr); err != nil {
+		return nil, err
+	}
+
+	return emr.Messages, nil
 }

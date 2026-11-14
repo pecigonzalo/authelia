@@ -1,0 +1,42 @@
+{
+	"Claim": "Tāpuni {{name}}",
+	"Client ID": "ID Client: {{client_id}}",
+	"Consent Request": "Tono kāpu",
+	"Remember Consent": "E haamana'o i te kāpu",
+	"Scope": "Tei {{name}}",
+	"The above application is requesting the following permissions": "Te riro mai te nūna i runga nei e tono i te mau aore",
+	"This saves this consent as a pre-configured consent for future use": "E ti'a i te mau tuhinga i a'ahi i te rahi ae e pā ana i te mau pāpū e arata'i i te fa'atupua",
+	"claims": {
+		"address": "'Āre pato",
+		"birthdate": "Rā'ira",
+		"email": "Āmīl 'ōi",
+		"email_verified": "Āmīl 'ōi (Ua Pī'ā)",
+		"family_name": "I'oa Rū",
+		"gender": "'Ōra",
+		"given_name": "I'oa Tāpuni",
+		"groups": "Pāho Rūpū",
+		"locale": "Tai'ā / Reo",
+		"middle_name": "I'oa Nū",
+		"name": "I'oa Pānui",
+		"nickname": "I'oa Tina",
+		"phone_number": "Namua pā",
+		"phone_number_verified": "Namua pā (Ua Pī'ā)",
+		"picture": "URL Pic",
+		"preferred_username": "I'oa Fa'avae",
+		"profile": "URL Pānui",
+		"sub": "Te 'Ākau Tahi",
+		"updated_at": "Wā Rere te Pā",
+		"website": "URL Pātai",
+		"zoneinfo": "Tāianei"
+	},
+	"scopes": {
+		"address": "Hopoi i tō mau bōrā",
+		"authelia.bearer.authz": "Hopoi i nā mau Ōrihī i te tāpuhi i kā oe",
+		"email": "Hopoi i tō mau mīharo ī-mel",
+		"groups": "Hopoi i tō mau pāteʻa rūpū",
+		"offline_access": "Aita e farii i te mau fa'amauraa e teita'i i te mau a'i",
+		"openid": "Ahi i te OpenID e faa'ite i to oe i'oa",
+		"phone": "Hopoi i tō mau namu pā",
+		"profile": "Ahi i to oe mau fa'ahuarau parau"
+	}
+}

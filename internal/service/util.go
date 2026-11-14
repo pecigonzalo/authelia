@@ -1,0 +1,238 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"syscall"
+
+	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
+
+	"github.com/authelia/authelia/v4/internal/middlewares"
+	"github.com/authelia/authelia/v4/internal/systemd"
+)
+
+// RunAll runs the services from every provisioner returned by GetProvisioners.
+func RunAll(ctx Context) (err error) {
+	provisioners := GetProvisioners()
+
+	return Run(ctx, provisioners...)
+}
+
+// Run provisions and runs the services from the given provisioners until the context is cancelled, a SIGINT or
+// SIGTERM signal is received, or a service terminates. It returns ErrApplicationReload if a service requested that the
+// application be reloaded rather than shut down.
+func Run(ctx Context, provisioners ...Provisioner) (err error) {
+	cctx, cancel := context.WithCancel(ctx)
+
+	group, cctx := errgroup.WithContext(cctx)
+
+	defer cancel()
+
+	quit := make(chan os.Signal, 1)
+
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	defer signal.Stop(quit)
+
+	var (
+		services []Provider
+	)
+
+	log := ctx.GetLogger()
+
+	rctx := &runContext{base: ctx, Context: cctx}
+
+	for _, provisioner := range provisioners {
+		if service, err := provisioner(rctx); err != nil {
+			shutdown(log, services)
+
+			return fmt.Errorf("error occurred provisioning services: %w", err)
+		} else if service != nil {
+			services = append(services, service)
+		}
+	}
+
+	for _, service := range services {
+		group.Go(service.Run)
+	}
+
+	var notifier *systemd.Notifier
+
+	if notifier, err = systemd.NewNotifier(); err != nil {
+		log.WithError(err).Error("Error occurred initializing the service manager notifier")
+	}
+
+	defer notifier.Close()
+
+	log.Info("Startup complete")
+
+	if err = notifier.Ready(statusReady); err != nil {
+		log.WithError(err).Error("Error occurred notifying the service manager startup is complete")
+	}
+
+	select {
+	case s := <-quit:
+		log.WithField("signal", s.String()).Debug("Shutdown initiated due to process signal")
+	case <-cctx.Done():
+		log.Debug("Shutdown initiated due to context completion")
+	}
+
+	reloading := errors.Is(context.Cause(cctx), ErrApplicationReload)
+
+	cancel()
+
+	notifyShutdown(log, notifier, reloading)
+
+	shutdown(log, services)
+
+	closeProviders(log, ctx.GetProviders())
+
+	var reload bool
+
+	if err = group.Wait(); err != nil {
+		if errors.Is(err, ErrApplicationReload) {
+			reload = true
+		} else {
+			log.WithError(err).Error("Error occurred waiting for shutdown")
+		}
+	}
+
+	log.Info("Shutdown complete")
+
+	if reload {
+		return ErrApplicationReload
+	}
+
+	return nil
+}
+
+func notifyShutdown(log *logrus.Entry, notifier *systemd.Notifier, reloading bool) {
+	if reloading {
+		log.Info("Reload initiated")
+
+		if err := notifier.Reloading(); err != nil {
+			log.WithError(err).Error("Error occurred notifying the service manager a reload has been initiated")
+		}
+
+		return
+	}
+
+	log.Info("Shutdown initiated")
+
+	if err := notifier.Stopping(statusStopping); err != nil {
+		log.WithError(err).Error("Error occurred notifying the service manager shutdown has been initiated")
+	}
+}
+
+func closeProviders(log *logrus.Entry, providers middlewares.Providers) {
+	if err := providers.UserProvider.Close(); err != nil {
+		log.WithError(err).Error("Error occurred closing authentication connections")
+	}
+
+	if err := providers.StorageProvider.Close(); err != nil {
+		log.WithError(err).Error("Error occurred closing database connections")
+	}
+}
+
+func shutdown(log *logrus.Entry, services []Provider) {
+	wg := &sync.WaitGroup{}
+
+	log.Tracef("Shutdown of %d services is required", len(services))
+
+	for _, service := range services {
+		wg.Add(1)
+
+		go func(service Provider) {
+			defer wg.Done()
+
+			service.Log().Trace("Shutdown of service initiated")
+
+			service.Shutdown()
+
+			service.Log().Trace("Shutdown of service complete")
+		}(service)
+	}
+
+	wg.Wait()
+}
+
+// IsConfigFileWatcherEnabled determines if a configuration change will cause the Authelia application to reload.
+func IsConfigFileWatcherEnabled() (enabled bool) {
+	value, err := strconv.ParseBool(os.Getenv(environmentVariableConfigReload))
+
+	return err == nil && value
+}
+
+func connectionType(isTLS bool) string {
+	if isTLS {
+		return "TLS"
+	}
+
+	return "non-TLS"
+}
+
+func recoverErr(i any) error {
+	switch v := i.(type) {
+	case nil:
+		return nil
+	case string:
+		return fmt.Errorf("recovered panic: %s", v)
+	case error:
+		return fmt.Errorf("recovered panic: %w", v)
+	default:
+		return fmt.Errorf("recovered panic with unknown type: %v", v)
+	}
+}
+
+func newFileWatcherPaths(in []string) (paths FileWatcherPaths, err error) {
+	paths = make(FileWatcherPaths, len(in))
+
+	for i, path := range in {
+		if path == "" {
+			return nil, fmt.Errorf("path must be specified")
+		}
+
+		if path, err = filepath.Abs(path); err != nil {
+			return nil, fmt.Errorf("could not determine the absolute path of file '%s': %w", path, err)
+		}
+
+		var info os.FileInfo
+
+		if info, err = os.Stat(path); err != nil { //nolint:gosec // Paths are supplied by the administrator via configuration or environment, not by end users.
+			switch {
+			case os.IsNotExist(err):
+				return nil, fmt.Errorf("error stating file '%s': file does not exist", path)
+			case os.IsPermission(err):
+				return nil, fmt.Errorf("error stating file '%s': permission denied trying to read the file", path)
+			default:
+				return nil, fmt.Errorf("error stating file '%s': %w", path, err)
+			}
+		}
+
+		if info.IsDir() {
+			paths[i] = FileWatcherPath{
+				Directory: path,
+				Info:      info,
+			}
+		} else {
+			paths[i] = FileWatcherPath{
+				File:      filepath.Base(path),
+				Directory: filepath.Dir(path),
+				Info:      info,
+			}
+		}
+	}
+
+	return paths, nil
+}

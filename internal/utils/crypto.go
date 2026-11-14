@@ -1,24 +1,38 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package utils
 
 import (
 	"bytes"
+	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"hash"
+	"io"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/hkdf"
 
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
 	"github.com/authelia/authelia/v4/internal/logging"
@@ -94,7 +108,7 @@ func GenerateCertificate(privateKeyBuilder PrivateKeyBuilder, hosts []string, va
 
 	keyPEMBytes, err := ConvertDERToPEM(keyDERBytes, PrivateKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("faile to convert certificate in DER format into PEM: %v", err)
+		return nil, nil, fmt.Errorf("failed to convert certificate in DER format into PEM: %v", err)
 	}
 
 	return certPEMBytes, keyPEMBytes, nil
@@ -123,16 +137,7 @@ func ConvertDERToPEM(der []byte, blockType PEMBlockType) ([]byte, error) {
 }
 
 func publicKey(privateKey any) any {
-	switch k := privateKey.(type) {
-	case *rsa.PrivateKey:
-		return &k.PublicKey
-	case *ecdsa.PrivateKey:
-		return &k.PublicKey
-	case ed25519.PrivateKey:
-		return k.Public().(ed25519.PublicKey)
-	default:
-		return nil
-	}
+	return PublicKeyFromPrivateKey(privateKey)
 }
 
 // PrivateKeyBuilder interface for a private key builder.
@@ -183,37 +188,112 @@ func (ekb ECDSAKeyBuilder) Build() (any, error) {
 
 // ParseX509FromPEM parses PEM bytes and returns a PKCS key.
 func ParseX509FromPEM(data []byte) (key any, err error) {
-	block, _ := pem.Decode(data)
+	var (
+		block *pem.Block
+		rest  []byte
+	)
+
+	if block, rest = pem.Decode(data); block == nil {
+		return nil, errors.New("error occurred attempting to parse PEM block: either no PEM block was supplied or it was malformed")
+	}
+
+	if len(rest) != 0 {
+		return nil, errors.New("error occurred attempting to parse PEM block: the block either had trailing data or was otherwise malformed")
+	}
+
+	return ParsePEMBlock(block)
+}
+
+// ParseX509FromPEMRecursive allows returning the appropriate key type given some PEM encoded input.
+// For Keys this is a single value of one of *[rsa.PrivateKey], *[rsa.PublicKey], *[ecdsa.PrivateKey], *[ecdsa.PublicKey],
+// [ed25519.PrivateKey], or [ed25519.PublicKey]. For certificates this is
+// either a *X509.Certificate, or a []*X509.Certificate.
+func ParseX509FromPEMRecursive(data []byte) (decoded any, err error) {
+	var (
+		block        *pem.Block
+		multi        bool
+		certificates []*x509.Certificate
+	)
+
+	for i := 0; true; i++ {
+		block, data = pem.Decode(data)
+
+		n := len(data)
+
+		switch {
+		case block == nil:
+			return nil, fmt.Errorf("error occurred attempting to parse PEM block: either no PEM block was supplied or it was malformed")
+		case multi || n != 0:
+			switch block.Type {
+			case BlockTypeCertificate:
+				var certificate *x509.Certificate
+
+				if certificate, err = x509.ParseCertificate(block.Bytes); err != nil {
+					return nil, fmt.Errorf("error occurred attempting to parse PEM block: data contains multiple blocks but #%d had an error during parsing: %w", i, err)
+				}
+
+				certificates = append(certificates, certificate)
+			default:
+				return nil, fmt.Errorf("error occurred attempting to parse PEM block: data contains multiple blocks but #%d has a '%s' block type and should have a '%s' block type", i, block.Type, BlockTypeCertificate)
+			}
+
+			multi = true
+		default:
+			if decoded, err = ParsePEMBlock(block); err != nil {
+				return nil, err
+			}
+		}
+
+		if n == 0 {
+			break
+		}
+	}
+
+	switch {
+	case multi:
+		return certificates, nil
+	default:
+		return decoded, nil
+	}
+}
+
+// ParsePEMBlock parses a single PEM block into the relevant X509 data struct.
+func ParsePEMBlock(block *pem.Block) (key any, err error) {
 	if block == nil {
-		return nil, errors.New("failed to parse PEM block containing the key")
+		return nil, errors.New("failed to parse PEM block as it was empty")
 	}
 
 	switch block.Type {
 	case BlockTypeRSAPrivateKey:
-		key, err = x509.ParsePKCS1PrivateKey(block.Bytes)
+		return x509.ParsePKCS1PrivateKey(block.Bytes)
 	case BlockTypeECDSAPrivateKey:
-		key, err = x509.ParseECPrivateKey(block.Bytes)
+		return x509.ParseECPrivateKey(block.Bytes)
 	case BlockTypePKCS8PrivateKey:
-		key, err = x509.ParsePKCS8PrivateKey(block.Bytes)
+		return x509.ParsePKCS8PrivateKey(block.Bytes)
 	case BlockTypeRSAPublicKey:
-		key, err = x509.ParsePKCS1PublicKey(block.Bytes)
+		return x509.ParsePKCS1PublicKey(block.Bytes)
 	case BlockTypePKIXPublicKey:
-		key, err = x509.ParsePKIXPublicKey(block.Bytes)
+		return x509.ParsePKIXPublicKey(block.Bytes)
 	case BlockTypeCertificate:
-		key, err = x509.ParseCertificate(block.Bytes)
+		return x509.ParseCertificate(block.Bytes)
+	case BlockTypeCertificateRequest:
+		return x509.ParseCertificateRequest(block.Bytes)
+	case BlockTypeX509CRL:
+		return x509.ParseRevocationList(block.Bytes)
 	default:
-		return nil, fmt.Errorf("unknown block type: %s", block.Type)
+		switch {
+		case strings.Contains(block.Type, "PRIVATE KEY"):
+			return x509.ParsePKCS8PrivateKey(block.Bytes)
+		case strings.Contains(block.Type, "PUBLIC KEY"):
+			return x509.ParsePKIXPublicKey(block.Bytes)
+		default:
+			return nil, fmt.Errorf("unknown block type: %s", block.Type)
+		}
 	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return key, nil
 }
 
-// CastX509AsCertificate converts an interface to an *x509.Certificate.
-func CastX509AsCertificate(c any) (certificate *x509.Certificate, ok bool) {
+// AssertToX509Certificate converts an interface to an *[x509.Certificate].
+func AssertToX509Certificate(c any) (certificate *x509.Certificate, ok bool) {
 	switch t := c.(type) {
 	case x509.Certificate:
 		return &t, true
@@ -224,18 +304,22 @@ func CastX509AsCertificate(c any) (certificate *x509.Certificate, ok bool) {
 	}
 }
 
-// IsX509PrivateKey returns true if the provided interface is an rsa.PrivateKey, ecdsa.PrivateKey, or ed25519.PrivateKey.
+// IsX509PrivateKey returns true if the provided interface is an [rsa.PrivateKey], [ecdsa.PrivateKey], or [ed25519.PrivateKey].
 func IsX509PrivateKey(i any) bool {
 	switch i.(type) {
 	case rsa.PrivateKey, *rsa.PrivateKey, ecdsa.PrivateKey, *ecdsa.PrivateKey, ed25519.PrivateKey, *ed25519.PrivateKey:
 		return true
 	default:
-		return false
+		return IsMLDSAPrivateKey(i)
 	}
 }
 
-// NewTLSConfig generates a tls.Config from a schema.TLSConfig and a x509.CertPool.
-func NewTLSConfig(config *schema.TLSConfig, rootCAs *x509.CertPool) (tlsConfig *tls.Config) {
+// NewTLSConfig generates a [tls.Config] from a schema.TLS and a [x509.CertPool].
+func NewTLSConfig(config *schema.TLS, rootCAs *x509.CertPool) (tlsConfig *tls.Config) {
+	if config == nil {
+		return nil
+	}
+
 	var certificates []tls.Certificate
 
 	if config.PrivateKey != nil && config.CertificateChain.HasCertificates() {
@@ -258,11 +342,20 @@ func NewTLSConfig(config *schema.TLSConfig, rootCAs *x509.CertPool) (tlsConfig *
 	}
 }
 
-// NewX509CertPool generates a x509.CertPool from the system PKI and the directory specified.
+// NewX509CertPool generates a [x509.CertPool] from the system PKI and the directory specified using the standard factory.
 func NewX509CertPool(directory string) (certPool *x509.CertPool, warnings []error, errors []error) {
-	var err error
+	return NewX509CertPoolWithFactory(directory, &StandardX509SystemCertPoolFactory{})
+}
 
-	if certPool, err = x509.SystemCertPool(); err != nil {
+// NewX509CertPoolWithFactory generates a [x509.CertPool] from the system PKI and the directory specified using a specific
+// factory.
+func NewX509CertPoolWithFactory(directory string, factory X509SystemCertPoolFactory) (certPool *x509.CertPool, warnings []error, errors []error) {
+	if factory == nil {
+		return nil, nil, []error{fmt.Errorf("failed to create x509 cert pool as no factory was provided")}
+	}
+
+	var err error
+	if certPool, err = factory.SystemCertPool(); err != nil {
 		warnings = append(warnings, fmt.Errorf("could not load system certificate pool which may result in untrusted certificate issues: %v", err))
 		certPool = x509.NewCertPool()
 	}
@@ -294,7 +387,7 @@ func NewX509CertPool(directory string) (certPool *x509.CertPool, warnings []erro
 			var data []byte
 
 			if data, err = os.ReadFile(certPath); err != nil {
-				errors = append(errors, fmt.Errorf("could not read certificate %v", err))
+				errors = append(errors, fmt.Errorf("error occurred trying to read certificate: %w", err))
 			} else if ok := certPool.AppendCertsFromPEM(data); !ok {
 				errors = append(errors, fmt.Errorf("could not import certificate %s", entry.Name()))
 			}
@@ -306,8 +399,25 @@ func NewX509CertPool(directory string) (certPool *x509.CertPool, warnings []erro
 	return certPool, warnings, errors
 }
 
-// WriteCertificateBytesToPEM writes a certificate/csr to a file in the PEM format.
-func WriteCertificateBytesToPEM(path string, csr bool, certs ...[]byte) (err error) {
+// WriteCertificateBytesAsPEMToPath writes a certificate/csr to a file in the PEM format.
+func WriteCertificateBytesAsPEMToPath(path string, csr bool, certs ...[]byte) (err error) {
+	var out *os.File
+
+	if out, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600); err != nil {
+		return err
+	}
+
+	if err = WriteCertificateBytesAsPEMToWriter(out, csr, certs...); err != nil {
+		_ = out.Close()
+
+		return err
+	}
+
+	return out.Close()
+}
+
+// WriteCertificateBytesAsPEMToWriter writes a certificate/csr to a [io.Writer] in the PEM format.
+func WriteCertificateBytesAsPEMToWriter(wr io.Writer, csr bool, certs ...[]byte) (err error) {
 	blockType := BlockTypeCertificate
 	if csr {
 		blockType = BlockTypeCertificateRequest
@@ -319,40 +429,49 @@ func WriteCertificateBytesToPEM(path string, csr bool, certs ...[]byte) (err err
 		blocks[i] = &pem.Block{Type: blockType, Bytes: cert}
 	}
 
-	return WritePEM(path, blocks...)
+	return WritePEMBlocksToWriter(wr, blocks...)
 }
 
-// WritePEM writes a set of *pem.Blocks to a file.
-func WritePEM(path string, blocks ...*pem.Block) (err error) {
+// WriteKeyToPEM writes a key that can be encoded as a PEM to a file in the PEM format.
+func WriteKeyToPEM(key any, path string, legacy bool) (err error) {
+	block, err := PEMBlockFromX509Key(key, legacy)
+	if err != nil {
+		return err
+	}
+
+	return WritePEMBlocksToPath(path, block)
+}
+
+// WritePEMBlocksToPath writes a set of *pem.Blocks to a file.
+func WritePEMBlocksToPath(path string, blocks ...*pem.Block) (err error) {
 	var out *os.File
 
 	if out, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600); err != nil {
 		return err
 	}
 
-	for _, block := range blocks {
-		if err = pem.Encode(out, block); err != nil {
-			_ = out.Close()
+	if err = WritePEMBlocksToWriter(out, blocks...); err != nil {
+		_ = out.Close()
 
-			return err
-		}
+		return err
 	}
 
 	return out.Close()
 }
 
-// WriteKeyToPEM writes a key that can be encoded as a PEM to a file in the PEM format.
-func WriteKeyToPEM(key any, path string, pkcs8 bool) (err error) {
-	block, err := PEMBlockFromX509Key(key, pkcs8)
-	if err != nil {
-		return err
+// WritePEMBlocksToWriter encodes the given PEM blocks to the given writer.
+func WritePEMBlocksToWriter(w io.Writer, blocks ...*pem.Block) (err error) {
+	for _, block := range blocks {
+		if err = pem.Encode(w, block); err != nil {
+			return err
+		}
 	}
 
-	return WritePEM(path, block)
+	return nil
 }
 
-// PEMBlockFromX509Key turns a PublicKey or PrivateKey into a pem.Block.
-func PEMBlockFromX509Key(key any, pkcs8 bool) (pemBlock *pem.Block, err error) {
+// PEMBlockFromX509Key turns a PublicKey or PrivateKey into a [pem.Block].
+func PEMBlockFromX509Key(key any, legacy bool) (block *pem.Block, err error) {
 	var (
 		data      []byte
 		blockType string
@@ -360,43 +479,61 @@ func PEMBlockFromX509Key(key any, pkcs8 bool) (pemBlock *pem.Block, err error) {
 
 	switch k := key.(type) {
 	case *rsa.PrivateKey:
-		if pkcs8 {
-			blockType = BlockTypePKCS8PrivateKey
-			data, err = x509.MarshalPKCS8PrivateKey(key)
+		if legacy {
+			blockType = BlockTypeRSAPrivateKey
+			data = x509.MarshalPKCS1PrivateKey(k)
 
 			break
 		}
 
-		blockType = BlockTypeRSAPrivateKey
-		data = x509.MarshalPKCS1PrivateKey(k)
+		blockType = BlockTypePKCS8PrivateKey
+		data, err = x509.MarshalPKCS8PrivateKey(key)
 	case *ecdsa.PrivateKey:
-		if pkcs8 {
-			blockType = BlockTypePKCS8PrivateKey
-			data, err = x509.MarshalPKCS8PrivateKey(key)
+		if legacy {
+			blockType = BlockTypeECDSAPrivateKey
+			data, err = x509.MarshalECPrivateKey(k)
 
 			break
 		}
 
-		blockType = BlockTypeECDSAPrivateKey
-		data, err = x509.MarshalECPrivateKey(k)
+		blockType = BlockTypePKCS8PrivateKey
+		data, err = x509.MarshalPKCS8PrivateKey(key)
 	case ed25519.PrivateKey:
 		blockType = BlockTypePKCS8PrivateKey
 		data, err = x509.MarshalPKCS8PrivateKey(k)
 	case *rsa.PublicKey:
-		if pkcs8 {
-			blockType = BlockTypePKIXPublicKey
-			data, err = x509.MarshalPKIXPublicKey(key)
+		if legacy {
+			blockType = BlockTypeRSAPublicKey
+			data = x509.MarshalPKCS1PublicKey(k)
 
 			break
 		}
 
-		blockType = BlockTypeRSAPublicKey
-		data = x509.MarshalPKCS1PublicKey(k)
+		blockType = BlockTypePKIXPublicKey
+		data, err = x509.MarshalPKIXPublicKey(key)
 	case *ecdsa.PublicKey, ed25519.PublicKey:
 		blockType = BlockTypePKIXPublicKey
 		data, err = x509.MarshalPKIXPublicKey(k)
+	case *x509.Certificate:
+		blockType = BlockTypeCertificate
+		data = k.Raw
+	case *x509.CertificateRequest:
+		blockType = BlockTypeCertificateRequest
+		data = k.Raw
+	case *x509.RevocationList:
+		blockType = BlockTypeX509CRL
+		data = k.Raw
 	default:
-		err = fmt.Errorf("failed to match key type: %T", k)
+		switch {
+		case IsMLDSAPrivateKey(k):
+			blockType = BlockTypePKCS8PrivateKey
+			data, err = x509.MarshalPKCS8PrivateKey(k)
+		case IsMLDSAPublicKey(k):
+			blockType = BlockTypePKIXPublicKey
+			data, err = x509.MarshalPKIXPublicKey(k)
+		default:
+			err = fmt.Errorf("failed to match key type: %T", k)
+		}
 	}
 
 	if err != nil {
@@ -404,12 +541,13 @@ func PEMBlockFromX509Key(key any, pkcs8 bool) (pemBlock *pem.Block, err error) {
 	}
 
 	return &pem.Block{
-		Type:  blockType,
-		Bytes: data,
+		Type:    blockType,
+		Headers: make(map[string]string),
+		Bytes:   data,
 	}, nil
 }
 
-// KeySigAlgorithmFromString returns a x509.PublicKeyAlgorithm and x509.SignatureAlgorithm given a keyAlgorithm and signatureAlgorithm string.
+// KeySigAlgorithmFromString returns a [x509.PublicKeyAlgorithm] and [x509.SignatureAlgorithm] given a keyAlgorithm and signatureAlgorithm string.
 func KeySigAlgorithmFromString(keyAlgorithm, signatureAlgorithm string) (keyAlg x509.PublicKeyAlgorithm, sigAlg x509.SignatureAlgorithm) {
 	keyAlg = PublicKeyAlgorithmFromString(keyAlgorithm)
 
@@ -425,11 +563,15 @@ func KeySigAlgorithmFromString(keyAlgorithm, signatureAlgorithm string) (keyAlg 
 	case x509.Ed25519:
 		return keyAlg, x509.PureEd25519
 	default:
+		if alg, ok := PublicKeyAlgorithmMLDSA(); ok && keyAlg == alg {
+			return keyAlg, MLDSASignatureAlgorithmFromString(signatureAlgorithm)
+		}
+
 		return keyAlg, x509.UnknownSignatureAlgorithm
 	}
 }
 
-// PublicKeyAlgorithmFromString returns a x509.PublicKeyAlgorithm given an appropriate string.
+// PublicKeyAlgorithmFromString returns a [x509.PublicKeyAlgorithm] given an appropriate string.
 func PublicKeyAlgorithmFromString(algorithm string) (alg x509.PublicKeyAlgorithm) {
 	switch strings.ToUpper(algorithm) {
 	case KeyAlgorithmRSA:
@@ -438,12 +580,18 @@ func PublicKeyAlgorithmFromString(algorithm string) (alg x509.PublicKeyAlgorithm
 		return x509.ECDSA
 	case KeyAlgorithmEd25519:
 		return x509.Ed25519
+	case KeyAlgorithmMLDSA:
+		if alg, ok := PublicKeyAlgorithmMLDSA(); ok {
+			return alg
+		}
+
+		return x509.UnknownPublicKeyAlgorithm
 	default:
 		return x509.UnknownPublicKeyAlgorithm
 	}
 }
 
-// RSASignatureAlgorithmFromString returns a x509.SignatureAlgorithm for the RSA x509.PublicKeyAlgorithm given an
+// RSASignatureAlgorithmFromString returns a [x509.SignatureAlgorithm] for the RSA [x509.PublicKeyAlgorithm] given an
 // algorithm string.
 func RSASignatureAlgorithmFromString(algorithm string) (alg x509.SignatureAlgorithm) {
 	switch strings.ToUpper(algorithm) {
@@ -460,7 +608,7 @@ func RSASignatureAlgorithmFromString(algorithm string) (alg x509.SignatureAlgori
 	}
 }
 
-// ECDSASignatureAlgorithmFromString returns a x509.SignatureAlgorithm for the ECDSA x509.PublicKeyAlgorithm given an
+// ECDSASignatureAlgorithmFromString returns a [x509.SignatureAlgorithm] for the ECDSA [x509.PublicKeyAlgorithm] given an
 // algorithm string.
 func ECDSASignatureAlgorithmFromString(algorithm string) (alg x509.SignatureAlgorithm) {
 	switch strings.ToUpper(algorithm) {
@@ -477,7 +625,7 @@ func ECDSASignatureAlgorithmFromString(algorithm string) (alg x509.SignatureAlgo
 	}
 }
 
-// EllipticCurveFromString turns a string into an elliptic.Curve.
+// EllipticCurveFromString turns a string into an [elliptic.Curve].
 func EllipticCurveFromString(curveString string) (curve elliptic.Curve) {
 	switch strings.ToUpper(curveString) {
 	case EllipticCurveAltP224, EllipticCurveP224:
@@ -503,6 +651,10 @@ func PublicKeyFromPrivateKey(privateKey any) (publicKey any) {
 	case ed25519.PrivateKey:
 		return k.Public().(ed25519.PublicKey)
 	default:
+		if signer, ok := k.(crypto.Signer); ok && IsMLDSAPrivateKey(k) {
+			return signer.Public()
+		}
+
 		return nil
 	}
 }
@@ -582,4 +734,160 @@ loop:
 	}
 
 	return extKeyUsage
+}
+
+// TLSVersionFromBytesString converts a given 4 byte hexadecimal string into the appropriate TLS version.
+func TLSVersionFromBytesString(input string) (version int, err error) {
+	if n := len(input); n != 4 {
+		return -1, fmt.Errorf("the input size was incorrect: should be 4 but was %d", n)
+	}
+
+	decoded, err := hex.DecodeString(input)
+	if err != nil {
+		return -1, fmt.Errorf("failed to decode hex: %w", err)
+	}
+
+	value := binary.BigEndian.Uint16(decoded)
+
+	version = int(value)
+
+	switch version {
+	case tls.VersionSSL30: //nolint:staticcheck
+		return tls.VersionSSL30, nil //nolint:staticcheck
+	case tls.VersionTLS10:
+		return tls.VersionTLS10, nil
+	case tls.VersionTLS11:
+		return tls.VersionTLS11, nil
+	case tls.VersionTLS12:
+		return tls.VersionTLS12, nil
+	case tls.VersionTLS13:
+		return tls.VersionTLS13, nil
+	default:
+		return -1, fmt.Errorf("tls version 0x%x is unknown", version)
+	}
+}
+
+// IsInsecureCipherSuite returns true if a cipher suite is insecure.
+func IsInsecureCipherSuite(cipherSuite uint16) bool {
+	for _, suite := range tls.InsecureCipherSuites() {
+		if suite.ID == cipherSuite {
+			return true
+		}
+	}
+
+	return false
+}
+
+// UnsafeGetIntermediatesFromPeerCertificates attempts to find valid intermediates from the provided peer certificates.
+//
+// CRITICAL: This function should not be used for production code as it may not produce the correct output to properly
+// verify the chain. This function is intended to be used for testing purposes only.
+func UnsafeGetIntermediatesFromPeerCertificates(certs []*x509.Certificate, roots, ints *x509.CertPool) (intermediates *x509.CertPool) {
+	var err error
+
+	n := len(certs) - 1
+
+	opts := x509.VerifyOptions{}
+
+	if roots != nil {
+		opts.Roots = roots.Clone()
+	}
+
+	if ints != nil {
+		opts.Intermediates = ints.Clone()
+	}
+
+	for i := n; i >= 0; i-- {
+		if _, err = certs[i].Verify(opts); err == nil {
+			continue
+		}
+
+		if i == n {
+			// No certs in the chain are valid.
+			break
+		}
+
+		// Intentionally only add the certificates within the trust chain.
+		if certs[i+1].IsCA {
+			if _, err = certs[i+1].Verify(opts); err == nil {
+				opts.Intermediates.AddCert(certs[i+1])
+			}
+		}
+	}
+
+	return opts.Intermediates
+}
+
+// Encrypt encrypts data using 256-bit AES-GCM.  This both hides the content of
+// the data and provides a check that it hasn't been altered. Output takes the
+// form nonce|ciphertext|tag where '|' indicates concatenation.
+func Encrypt(plaintext, aad []byte, key []byte) (ciphertext []byte, err error) {
+	var (
+		block cipher.Block
+		gcm   cipher.AEAD
+	)
+
+	if block, err = aes.NewCipher(key); err != nil {
+		return nil, err
+	}
+
+	if gcm, err = cipher.NewGCM(block); err != nil {
+		return nil, err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+
+	return gcm.Seal(nonce, nonce, plaintext, aad), nil
+}
+
+// Decrypt decrypts data using 256-bit AES-GCM.  This both hides the content of
+// the data and provides a check that it hasn't been altered. Expects input
+// form nonce|ciphertext|tag where '|' indicates concatenation.
+func Decrypt(ciphertext, aad []byte, key []byte) (plaintext []byte, err error) {
+	var (
+		block cipher.Block
+		gcm   cipher.AEAD
+	)
+
+	if block, err = aes.NewCipher(key); err != nil {
+		return nil, err
+	}
+
+	if gcm, err = cipher.NewGCM(block); err != nil {
+		return nil, err
+	}
+
+	if len(ciphertext) < gcm.NonceSize() {
+		return nil, errors.New("malformed ciphertext")
+	}
+
+	return gcm.Open(nil, ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():], aad)
+}
+
+// DeriveCryptographicKey is the new derivation function to add entropy to user generated keys.
+func DeriveCryptographicKey(raw []byte, info string, hash func() hash.Hash) (key []byte, err error) {
+	if len(raw) == 0 {
+		return nil, errors.New("error deriving cryptographic key: value is empty")
+	}
+
+	key = make([]byte, hash().Size())
+
+	reader := hkdf.New(hash, raw, nil, []byte(info))
+
+	if _, err = io.ReadFull(reader, key); err != nil {
+		return nil, fmt.Errorf("error occurred reading hkdf: %w", err)
+	}
+
+	return key, err
+}
+
+// DeriveLegacyCryptographicKey is the derivation function used with the old style SHA256 key deriviations.
+func DeriveLegacyCryptographicKey(raw []byte) (key []byte) {
+	sum := sha256.Sum256(raw)
+
+	return sum[:]
 }

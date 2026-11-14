@@ -1,25 +1,28 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
-	"fmt"
 	"time"
 )
 
 var highAvailabilitySuiteName = "HighAvailability"
 
 var haDockerEnvironment = NewDockerEnvironment([]string{
-	"internal/suites/docker-compose.yml",
-	"internal/suites/HighAvailability/docker-compose.yml",
-	"internal/suites/example/compose/authelia/docker-compose.backend.{}.yml",
-	"internal/suites/example/compose/authelia/docker-compose.frontend.{}.yml",
-	"internal/suites/example/compose/mariadb/docker-compose.yml",
-	"internal/suites/example/compose/redis-sentinel/docker-compose.yml",
-	"internal/suites/example/compose/nginx/backend/docker-compose.yml",
-	"internal/suites/example/compose/nginx/portal/docker-compose.yml",
-	"internal/suites/example/compose/smtp/docker-compose.yml",
-	"internal/suites/example/compose/httpbin/docker-compose.yml",
-	"internal/suites/example/compose/ldap/docker-compose.admin.yml", // This is just used for administration, not for testing.
-	"internal/suites/example/compose/ldap/docker-compose.yml",
+	"internal/suites/compose.yml",
+	"internal/suites/HighAvailability/compose.yml",
+	"internal/suites/example/compose/authelia/compose.backend.{}.yml",
+	"internal/suites/example/compose/authelia/compose.frontend.{}.yml",
+	"internal/suites/example/compose/mariadb/compose.yml",
+	"internal/suites/example/compose/redis-sentinel/compose.yml",
+	"internal/suites/example/compose/nginx/backend/compose.yml",
+	"internal/suites/example/compose/nginx/portal/compose.yml",
+	"internal/suites/example/compose/smtp/compose.yml",
+	"internal/suites/example/compose/httpbin/compose.yml",
+	"internal/suites/example/compose/ldap/compose.admin.yml", // This is just used for administration, not for testing.
+	"internal/suites/example/compose/ldap/compose.yml",
 })
 
 func init() {
@@ -32,25 +35,11 @@ func init() {
 			return err
 		}
 
-		return updateDevEnvFileForDomain(BaseDomain, true)
+		return updateDevEnvFileForDomain(BaseDomain, haDockerEnvironment)
 	}
 
 	displayAutheliaLogs := func() error {
-		backendLogs, err := haDockerEnvironment.Logs("authelia-backend", nil)
-		if err != nil {
-			return err
-		}
-
-		fmt.Println(backendLogs)
-
-		frontendLogs, err := haDockerEnvironment.Logs("authelia-frontend", nil)
-		if err != nil {
-			return err
-		}
-
-		fmt.Println(frontendLogs)
-
-		return nil
+		return haDockerEnvironment.PrintLogs("authelia-backend", "authelia-frontend")
 	}
 
 	teardown := func(suitePath string) error {
@@ -59,12 +48,12 @@ func init() {
 
 	GlobalRegistry.Register(highAvailabilitySuiteName, Suite{
 		SetUp:           setup,
-		SetUpTimeout:    5 * time.Minute,
+		SetUpTimeout:    2 * time.Minute,
 		OnSetupTimeout:  displayAutheliaLogs,
+		OnError:         displayAutheliaLogs,
 		TestTimeout:     6 * time.Minute,
 		TearDown:        teardown,
-		TearDownTimeout: 2 * time.Minute,
-		OnError:         displayAutheliaLogs,
+		TearDownTimeout: 1 * time.Minute,
 		Description: `This suite is made to test Authelia in a *complete*
 environment, that is, with all components making Authelia highly available.`,
 	})

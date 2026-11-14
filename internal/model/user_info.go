@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package model
 
 import (
@@ -9,17 +13,26 @@ type UserInfo struct {
 	// The users display name.
 	DisplayName string `db:"-" json:"display_name"`
 
+	// The users email address.
+	Emails []string `db:"-" json:"emails"`
+
 	// The preferred 2FA method.
 	Method string `db:"second_factor_method" json:"method" valid:"required"`
 
 	// True if a TOTP device has been registered.
 	HasTOTP bool `db:"has_totp" json:"has_totp" valid:"required"`
 
-	// True if a WebAuthn device has been registered.
+	// True if a WebAuthn credential has been registered.
 	HasWebAuthn bool `db:"has_webauthn" json:"has_webauthn" valid:"required"`
 
 	// True if a duo device has been configured as the preferred.
 	HasDuo bool `db:"has_duo" json:"has_duo" valid:"required"`
+
+	// True if the user has at least one unused recovery code.
+	HasRecoveryCodes bool `db:"-" json:"has_recovery_codes"`
+
+	// True if the user has 2 or fewer unused recovery codes (used by the frontend to show a low-codes nudge).
+	LowRecoveryCodes bool `db:"-" json:"low_recovery_codes"`
 }
 
 // SetDefaultPreferred2FAMethod configures the default method based on what is configured as available and the users available methods.

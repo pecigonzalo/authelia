@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package handlers
 
 import (
@@ -7,16 +11,38 @@ import (
 // ConfigurationGET get the configuration accessible to authenticated users.
 func ConfigurationGET(ctx *middlewares.AutheliaCtx) {
 	body := configurationBody{
-		AvailableMethods: make(MethodList, 0, 3),
+		AvailableMethods:       make(MethodList, 0, 3),
+		PasswordChangeDisabled: false,
+		PasswordResetDisabled:  false,
 	}
 
-	if ctx.Providers.Authorizer.IsSecondFactorEnabled() {
+	if secondFactorUsable(ctx) {
 		body.AvailableMethods = ctx.AvailableSecondFactorMethods()
 	}
 
-	ctx.Logger.Tracef("Available methods are %s", body.AvailableMethods)
+	body.PasswordChangeDisabled = ctx.Configuration.AuthenticationBackend.PasswordChange.Disable
+	body.PasswordResetDisabled = ctx.Configuration.AuthenticationBackend.PasswordReset.Disable
+	body.RecoveryCodesDisabled = ctx.Configuration.RecoveryCodes.Disable
+
+	ctx.Logger.WithFields(
+		map[string]any{
+			"available_methods":        body.AvailableMethods,
+			"password_change_disabled": body.PasswordChangeDisabled,
+			"password_reset_disabled":  body.PasswordResetDisabled,
+			"recovery_codes_disabled":  body.RecoveryCodesDisabled,
+		}).Trace("Authelia configuration requested")
 
 	if err := ctx.SetJSONBody(body); err != nil {
 		ctx.Logger.Errorf("Unable to set configuration response in body: %s", err)
 	}
+}
+
+func secondFactorUsable(ctx *middlewares.AutheliaCtx) bool {
+	if ctx.Providers.Authorizer.IsSecondFactorEnabled() {
+		return true
+	}
+
+	elevation := ctx.Configuration.IdentityValidation.ElevatedSession
+
+	return elevation.RequireSecondFactor || elevation.SkipSecondFactor
 }

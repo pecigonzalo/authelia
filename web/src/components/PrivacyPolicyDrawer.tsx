@@ -1,43 +1,43 @@
-import { Button, Drawer, DrawerProps, Grid, Typography } from "@mui/material";
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { Trans, useTranslation } from "react-i18next";
 
 import PrivacyPolicyLink from "@components/PrivacyPolicyLink";
+import { Button } from "@components/UI/Button";
+import { Sheet, SheetContent, SheetTitle } from "@components/UI/Sheet";
+import { EncodedName } from "@constants/constants";
+import { LocalStoragePrivacyPolicyAccepted } from "@constants/LocalStorage";
 import { usePersistentStorageValue } from "@hooks/PersistentStorage";
 import { getPrivacyPolicyEnabled, getPrivacyPolicyRequireAccept } from "@utils/Configuration";
 
-const PrivacyPolicyDrawer = function (props: DrawerProps) {
-    const privacyEnabled = getPrivacyPolicyEnabled();
-    const privacyRequireAccept = getPrivacyPolicyRequireAccept();
-    const [accepted, setAccepted] = usePersistentStorageValue<boolean>("privacy-policy-accepted", false);
+const PrivacyPolicyDrawer = function () {
     const { t: translate } = useTranslation();
 
+    const privacyEnabled = getPrivacyPolicyEnabled();
+    const privacyRequireAccept = getPrivacyPolicyRequireAccept();
+    const [accepted, setAccepted] = usePersistentStorageValue<boolean>(LocalStoragePrivacyPolicyAccepted, false);
+
     return privacyEnabled && privacyRequireAccept && !accepted ? (
-        <Drawer {...props} anchor="bottom" open={!accepted}>
-            <Grid
-                container
-                alignItems="center"
-                justifyContent="center"
-                textAlign="center"
+        <Sheet open={!accepted}>
+            <SheetContent
+                side="bottom"
+                showCloseButton={false}
                 aria-labelledby="privacy-policy-drawer-title"
                 aria-describedby="privacy-policy-drawer-description"
             >
-                <Grid container item xs={12} paddingY={2}>
-                    <Grid item xs={12}>
-                        <Typography id="privacy-policy-drawer-title" variant="h6" component="h2">
-                            {translate("Privacy Policy")}
-                        </Typography>
-                    </Grid>
-                </Grid>
-                <Grid item xs={12}>
-                    <Typography id="privacy-policy-drawer-description">
+                <div className="flex flex-col items-center justify-center text-center gap-4 py-4">
+                    <SheetTitle id="privacy-policy-drawer-title">{translate("Privacy Policy")}</SheetTitle>
+                    <p id="privacy-policy-drawer-description">
                         <Trans
-                            i18nKey="You must view and accept the Privacy Policy before using"
-                            components={[<PrivacyPolicyLink />]}
-                        />{" "}
-                        Authelia.
-                    </Typography>
-                </Grid>
-                <Grid item xs={12} paddingY={2}>
+                            i18nKey="You must view and accept the Privacy Policy before using {{authelia}}."
+                            values={{ authelia: atob(String.fromCharCode(...EncodedName)) }}
+                            components={{
+                                policy: <PrivacyPolicyLink />,
+                            }}
+                        />
+                    </p>
                     <Button
                         onClick={() => {
                             setAccepted(true);
@@ -45,9 +45,9 @@ const PrivacyPolicyDrawer = function (props: DrawerProps) {
                     >
                         {translate("Accept")}
                     </Button>
-                </Grid>
-            </Grid>
-        </Drawer>
+                </div>
+            </SheetContent>
+        </Sheet>
     ) : null;
 };
 

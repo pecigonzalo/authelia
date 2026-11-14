@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package notification
 
 import (
@@ -20,41 +24,57 @@ import (
 )
 
 // NewSMTPNotifier creates a SMTPNotifier using the notifier configuration.
-func NewSMTPNotifier(config *schema.SMTPNotifierConfiguration, certPool *x509.CertPool) *SMTPNotifier {
-	var tlsconfig *tls.Config
+func NewSMTPNotifier(config *schema.NotifierSMTP, certPool *x509.CertPool) *SMTPNotifier {
+	log := logging.Logger().WithFields(map[string]any{"provider": "notifier"})
+
+	var configTLS *tls.Config
 
 	if config.TLS != nil {
-		tlsconfig = utils.NewTLSConfig(config.TLS, certPool)
+		configTLS = utils.NewTLSConfig(config.TLS, certPool)
 	}
 
-	opts := []gomail.Option{
-		gomail.WithPort(config.Port),
-		gomail.WithTLSConfig(tlsconfig),
-		gomail.WithHELO(config.Identifier),
-		gomail.WithTimeout(config.Timeout),
-		gomail.WithoutNoop(),
-	}
-
-	ssl := config.Port == smtpPortSUBMISSIONS
-
-	if ssl {
-		opts = append(opts, gomail.WithSSL())
-	}
+	var opts []gomail.Option //nolint:prealloc
 
 	switch {
-	case ssl:
-		break
+	case config.Address.IsExplicitlySecure():
+		opts = []gomail.Option{
+			gomail.WithSSLPort(false),
+			gomail.WithTLSPortPolicy(gomail.TLSMandatory),
+		}
+
+		log.Trace("Configuring with Explicit TLS")
 	case config.DisableStartTLS:
-		opts = append(opts, gomail.WithTLSPolicy(gomail.NoTLS))
+		opts = []gomail.Option{
+			gomail.WithTLSPortPolicy(gomail.NoTLS),
+			gomail.WithPort(int(config.Address.Port())),
+		}
+
+		log.Trace("Configuring without TLS")
 	case config.DisableRequireTLS:
-		opts = append(opts, gomail.WithTLSPolicy(gomail.TLSOpportunistic))
+		opts = []gomail.Option{
+			gomail.WithTLSPortPolicy(gomail.TLSOpportunistic),
+		}
+
+		log.Trace("Configuring with Opportunistic TLS")
 	default:
-		opts = append(opts, gomail.WithTLSPolicy(gomail.TLSMandatory))
+		opts = []gomail.Option{
+			gomail.WithTLSPortPolicy(gomail.TLSMandatory),
+		}
+
+		log.Trace("Configuring with Mandatory TLS")
 	}
+
+	opts = append(opts,
+		gomail.WithTLSConfig(configTLS),
+		gomail.WithTimeout(config.Timeout),
+		gomail.WithHELO(config.Identifier),
+		gomail.WithoutNoop(),
+		gomail.WithPort(int(config.Address.Port())),
+	)
 
 	var domain string
 
-	at := strings.LastIndex(config.Sender.Address, "@")
+	at := strings.Index(config.Sender.Address, "@")
 
 	if at >= 0 {
 		domain = config.Sender.Address[at+1:]
@@ -62,39 +82,55 @@ func NewSMTPNotifier(config *schema.SMTPNotifierConfiguration, certPool *x509.Ce
 		domain = "localhost.localdomain"
 	}
 
+	log.WithFields(map[string]any{
+		"port":    config.Address.Port(),
+		"helo":    config.Identifier,
+		"timeout": config.Timeout.Seconds(),
+		"domain":  domain,
+	}).Trace("Configuring Provider")
+
 	return &SMTPNotifier{
+		factory: &StandardSMTPClientFactory{
+			config: config,
+			opts:   opts,
+		},
 		config: config,
 		domain: domain,
-		random: &random.Cryptographical{},
-		tls:    utils.NewTLSConfig(config.TLS, certPool),
-		log:    logging.Logger(),
+		random: random.New(),
+		tls:    configTLS,
+		log:    log,
 		opts:   opts,
 	}
 }
 
 // SMTPNotifier a notifier to send emails to SMTP servers.
 type SMTPNotifier struct {
-	config *schema.SMTPNotifierConfiguration
-	domain string
-	random random.Provider
-	tls    *tls.Config
-	log    *logrus.Logger
-	opts   []gomail.Option
+	factory SMTPClientFactory
+	config  *schema.NotifierSMTP
+	domain  string
+	random  random.Provider
+	tls     *tls.Config
+	log     *logrus.Entry
+	opts    []gomail.Option
 }
 
 // StartupCheck implements model.StartupCheck to perform startup check operations.
 func (n *SMTPNotifier) StartupCheck() (err error) {
-	var client *gomail.Client
+	n.log.WithFields(map[string]any{"hostname": n.config.Address.Hostname()}).Trace("Creating Startup Check Client")
 
-	if client, err = gomail.NewClient(n.config.Host, n.opts...); err != nil {
-		return fmt.Errorf("failed to establish client: %w", err)
+	var client SMTPClient
+
+	if client, err = n.factory.GetClient(); err != nil {
+		return fmt.Errorf("notifier: smtp: failed to establish client: %w", err)
 	}
 
-	ctx := context.Background()
+	n.log.Trace("Dialing Startup Check Connection")
 
-	if err = client.DialWithContext(ctx); err != nil {
+	if err = client.DialWithContext(context.Background()); err != nil {
 		return fmt.Errorf("failed to dial connection: %w", err)
 	}
+
+	n.log.Trace("Closing Startup Check Connection")
 
 	if err = client.Close(); err != nil {
 		return fmt.Errorf("failed to close connection: %w", err)
@@ -105,46 +141,17 @@ func (n *SMTPNotifier) StartupCheck() (err error) {
 
 // Send a notification via the SMTPNotifier.
 func (n *SMTPNotifier) Send(ctx context.Context, recipient mail.Address, subject string, et *templates.EmailTemplate, data any) (err error) {
-	msg := gomail.NewMsg(
-		gomail.WithMIMEVersion(gomail.Mime10),
-		gomail.WithBoundary(n.random.StringCustom(30, random.CharSetAlphaNumeric)),
+	var (
+		msg    *gomail.Msg
+		client SMTPClient
 	)
 
-	n.setMessageID(msg, n.domain)
-
-	if err = msg.From(n.config.Sender.String()); err != nil {
-		return fmt.Errorf("notifier: smtp: failed to set from address: %w", err)
+	if msg, err = n.buildMessage(recipient, subject, et, data); err != nil {
+		return fmt.Errorf("notifier: smtp: failed to create envelope: %w", err)
 	}
 
-	if err = msg.AddTo(recipient.String()); err != nil {
-		return fmt.Errorf("notifier: smtp: failed to set to address: %w", err)
-	}
-
-	msg.Subject(strings.ReplaceAll(n.config.Subject, "{title}", subject))
-
-	switch {
-	case n.config.DisableHTMLEmails:
-		if err = msg.SetBodyTextTemplate(et.Text, data); err != nil {
-			return fmt.Errorf("notifier: smtp: failed to set body: text template errored: %w", err)
-		}
-	default:
-		if err = msg.AddAlternativeHTMLTemplate(et.HTML, data); err != nil {
-			return fmt.Errorf("notifier: smtp: failed to set body: html template errored: %w", err)
-		}
-
-		if err = msg.AddAlternativeTextTemplate(et.Text, data); err != nil {
-			return fmt.Errorf("notifier: smtp: failed to set body: text template errored: %w", err)
-		}
-	}
-
-	var client *gomail.Client
-
-	if client, err = gomail.NewClient(n.config.Host, n.opts...); err != nil {
+	if client, err = n.factory.GetClient(); err != nil {
 		return fmt.Errorf("notifier: smtp: failed to establish client: %w", err)
-	}
-
-	if auth := NewOpportunisticSMTPAuth(n.config); auth != nil {
-		client.SetSMTPAuthCustom(auth)
 	}
 
 	if err = client.DialWithContext(ctx); err != nil {
@@ -162,11 +169,69 @@ func (n *SMTPNotifier) Send(ctx context.Context, recipient mail.Address, subject
 	return nil
 }
 
-func (n *SMTPNotifier) setMessageID(msg *gomail.Msg, domain string) {
+func (n *SMTPNotifier) buildMessage(recipient mail.Address, subject string, et *templates.EmailTemplate, data any) (msg *gomail.Msg, err error) {
+	msg = gomail.NewMsg(
+		gomail.WithMIMEVersion(gomail.MIME10),
+		gomail.WithBoundary(n.random.StringCustom(30, random.CharSetAlphaNumeric)),
+	)
+
+	n.setMessageID(msg)
+
+	if err = msg.From(n.config.Sender.String()); err != nil {
+		return nil, fmt.Errorf("failed to set from address: %w", err)
+	}
+
+	if err = msg.AddTo(recipient.String()); err != nil {
+		return nil, fmt.Errorf("failed to set to address: %w", err)
+	}
+
+	msg.Subject(strings.ReplaceAll(n.config.Subject, "{title}", subject))
+
+	switch {
+	case n.config.DisableHTMLEmails:
+		if err = msg.SetBodyTextTemplate(et.Text, data); err != nil {
+			return nil, fmt.Errorf("failed to set body: text template errored: %w", err)
+		}
+	default:
+		if err = msg.AddAlternativeTextTemplate(et.Text, data); err != nil {
+			return nil, fmt.Errorf("failed to set body: text template errored: %w", err)
+		}
+
+		if err = msg.AddAlternativeHTMLTemplate(et.HTML, data); err != nil {
+			return nil, fmt.Errorf("failed to set body: html template errored: %w", err)
+		}
+	}
+
+	return msg, nil
+}
+
+func (n *SMTPNotifier) setMessageID(msg *gomail.Msg) {
 	rn := n.random.Intn(100000000)
 	rm := n.random.Intn(10000)
 	rs := n.random.StringCustom(17, random.CharSetAlphaNumeric)
 	pid := os.Getpid() + rm
 
-	msg.SetMessageIDWithValue(fmt.Sprintf("%d.%d%d.%s@%s", pid, rn, rm, rs, domain))
+	msg.SetMessageIDWithValue(fmt.Sprintf("%d.%d%d.%s@%s", pid, rn, rm, rs, n.domain))
+}
+
+// StandardSMTPClientFactory is the standard SMTPClientFactory implementation.
+type StandardSMTPClientFactory struct {
+	config *schema.NotifierSMTP
+	opts   []gomail.Option
+}
+
+// GetClient returns a new SMTPClient.
+func (f *StandardSMTPClientFactory) GetClient() (client SMTPClient, err error) {
+	if client, err = gomail.NewClient(f.config.Address.HostnameLiteral(), f.opts...); err != nil {
+		return nil, err
+	}
+
+	switch {
+	case len(f.config.Username)+len(f.config.Password) > 0:
+		client.SetSMTPAuthCustom(NewOpportunisticSMTPAuth(f.config))
+	default:
+		client.SetSMTPAuth(gomail.SMTPAuthNoAuth)
+	}
+
+	return client, nil
 }

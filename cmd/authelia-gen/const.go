@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 const (
@@ -8,27 +12,47 @@ const (
 	subPathCmd      = "cmd"
 	subPathInternal = "internal"
 
-	fileCICommitLintConfig = ".commitlintrc.js"
+	fileCICommitLintConfig = "commitlint.config.mjs"
 	fileWebI18NIndex       = "src/i18n/index.ts"
 	fileWebPackage         = "package.json"
 
-	fileDocsCommitMessageGuidelines = "docs/content/en/contributing/guidelines/commit-message.md"
+	fileDocsCommitMessageGuidelines = "docs/content/contributing/guidelines/commit-message.md"
 
 	fileCodeConfigKeys  = "internal/configuration/schema/keys.go"
 	fileServerGenerated = "internal/server/gen.go"
 	fileScriptsGen      = "cmd/authelia-scripts/cmd/gen.go"
 
-	dirDocs             = "docs"
-	dirDocsContent      = "content"
-	dirDocsData         = "data"
-	dirDocsCLIReference = "en/reference/cli"
+	dirDocs                  = "docs"
+	dirDocsContent           = "content"
+	dirDocsStatic            = "static"
+	dirDocsStaticJSONSchemas = "schemas"
+	dirDocsData              = "data"
+	dirDocsADR               = "reference/architecture-decision-log"
+	dirDocsCLIReference      = "reference/cli"
 
 	fileDocsDataLanguages  = "languages.json"
 	fileDocsDataMisc       = "misc.json"
 	fileDocsDataConfigKeys = "configkeys.json"
 
+	fileDocsStaticJSONSchemasConfiguration      = "configuration"
+	fileDocsStaticJSONSchemasUserDatabase       = "user-database"
+	fileDocsStaticJSONSchemasExportsTOTP        = "exports.totp"
+	fileDocsStaticJSONSchemasExportsWebAuthn    = "exports.webauthn"
+	fileDocsStaticJSONSchemasExportsIdentifiers = "exports.identifiers"
+
+	dirDocsStaticImages             = "images"
+	dirDocsStaticImagesContributors = "contributors"
+	fileAllContributors             = ".all-contributorsrc"
+	fileREADME                      = "README.md"
+
+	extSVG = ".svg"
+
 	fileGitHubIssueTemplateFR = ".github/ISSUE_TEMPLATE/feature-request.yml"
 	fileGitHubIssueTemplateBR = ".github/ISSUE_TEMPLATE/bug-report.yml"
+)
+
+const (
+	pathJSONSchema = "json-schema"
 )
 
 const (
@@ -38,9 +62,6 @@ const (
 
 const (
 	delimiterLineFrontMatter = "---"
-
-	localeDefault          = "en"
-	localeNamespaceDefault = "portal"
 )
 
 const (
@@ -51,7 +72,10 @@ const (
 const (
 	cmdUseRoot                   = "authelia-gen"
 	cmdUseCompletion             = "completion"
+	cmdUseHelp                   = "help"
 	cmdUseDocs                   = "docs"
+	cmdUseManage                 = "manage"
+	cmdUseMisc                   = "misc"
 	cmdUseDocsDate               = "date"
 	cmdUseDocsCLI                = "cli"
 	cmdUseDocsData               = "data"
@@ -64,55 +88,92 @@ const (
 	cmdUseCommitLint             = "commit-lint"
 	cmdUseCode                   = "code"
 	cmdUseCodeScripts            = "scripts"
+	cmdUseContributors           = "contributors"
 	cmdUseKeys                   = "keys"
 	cmdUseServer                 = "server"
 )
 
 const (
-	cmdFlagRoot                        = "dir.root"
-	cmdFlagWeb                         = "dir.web"
-	cmdFlagFileWebI18N                 = "file.web.i18n"
-	cmdFlagFileWebPackage              = "file.web.package"
-	cmdFlagDocs                        = "dir.docs"
-	cmdFlagDirLocales                  = "dir.locales"
-	cmdFlagDocsCLIReference            = "dir.docs.cli-reference"
-	cmdFlagDocsContent                 = "dir.docs.content"
-	cmdFlagDocsData                    = "dir.docs.data"
-	cmdFlagDocsDataMisc                = "file.docs.data.misc"
-	cmdFlagDocsDataKeys                = "file.docs.data.keys"
-	cmdFlagDocsDataLanguages           = "file.docs.data.languages"
-	cmdFlagFileConfigKeys              = "file.configuration-keys"
-	cmdFlagFileScriptsGen              = "file.scripts.gen"
-	cmdFlagFileServerGenerated         = "file.server.generated"
-	cmdFlagFileConfigCommitLint        = "file.commit-lint-config"
-	cmdFlagFileDocsCommitMsgGuidelines = "file.docs-commit-msg-guidelines"
-	cmdFlagFeatureRequest              = "file.feature-request"
-	cmdFlagBugReport                   = "file.bug-report"
+	cmdFlagRoot                                   = "dir.root"
+	cmdFlagWeb                                    = "dir.web"
+	cmdFlagFileWebI18N                            = "file.web.i18n"
+	cmdFlagFileWebPackage                         = "file.web.package"
+	cmdFlagDocs                                   = "dir.docs"
+	cmdFlagDirLocales                             = "dir.locales"
+	cmdFlagDirSchema                              = "dir.schema"
+	cmdFlagDirAuthentication                      = "dir.authentication"
+	cmdFlagDocsCLIReference                       = "dir.docs.cli-reference"
+	cmdFlagDocsContent                            = "dir.docs.content"
+	cmdFlagDocsStatic                             = "dir.docs.static"
+	cmdFlagDocsStaticJSONSchemas                  = "dir.docs.static.json-schemas"
+	cmdFlagDocsData                               = "dir.docs.data"
+	cmdFlagDocsADR                                = "dir.docs.adr"
+	cmdFlagDocsDataMisc                           = "file.docs.data.misc"
+	cmdFlagDocsDataKeys                           = "file.docs.data.keys"
+	cmdFlagDocsDataLanguages                      = "file.docs.data.languages"
+	cmdFlagDocsStaticJSONSchemaConfiguration      = "file.docs.static.json-schemas.configuration"
+	cmdFlagDocsStaticJSONSchemaUserDatabase       = "file.docs.static.json-schemas.user-database"
+	cmdFlagDocsStaticJSONSchemaExportsTOTP        = "file.docs.static.json-schemas.exports.totp"
+	cmdFlagDocsStaticJSONSchemaExportsWebAuthn    = "file.docs.static.json-schemas.exports.webauthn"
+	cmdFlagDocsStaticJSONSchemaExportsIdentifiers = "file.docs.static.json-schemas.exports.identifiers"
+	cmdFlagFileConfigKeys                         = "file.configuration-keys"
+	cmdFlagFileScriptsGen                         = "file.scripts.gen"
+	cmdFlagFileServerGenerated                    = "file.server.generated"
+	cmdFlagFileConfigCommitLint                   = "file.commit-lint-config"
+	cmdFlagFileDocsCommitMsgGuidelines            = "file.docs-commit-msg-guidelines"
+	cmdFlagFeatureRequest                         = "file.feature-request"
+	cmdFlagBugReport                              = "file.bug-report"
+	cmdFlagVersions                               = "versions"
 
 	cmdFlagExclude           = "exclude"
-	cmdFlagVersions          = "versions"
+	cmdFlagVersionCount      = "version-count"
 	cmdFlagCwd               = "cwd"
 	cmdFlagPackageConfigKeys = "package.configuration.keys"
 	cmdFlagPackageScriptsGen = "package.scripts.gen"
 )
 
 const (
-	codeCSPProductionDefaultSrc  = "'self'"
+	metaVersionMajor   = "major"
+	metaVersionMinor   = "minor"
+	metaVersionLatest  = "latest"
+	metaVersionCurrent = "current"
+)
+
+const (
+	codeCSPDirectiveDefaultSrc   = "default-src"
+	codeCSPSelf                  = "'self'"
 	codeCSPDevelopmentDefaultSrc = "'self' 'unsafe-eval'"
+	codeCSPNone                  = "'none'"
 	codeCSPNonce                 = "${NONCE}"
+)
+
+const (
+	goModuleBase = "github.com/authelia/authelia/v4"
+)
+
+const (
+	windows = "windows"
+
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
 )
 
 var (
 	codeCSPValuesCommon = []CSPValue{
-		{Name: "default-src", Value: ""},
-		{Name: "frame-src", Value: "'none'"},
-		{Name: "object-src", Value: "'none'"},
+		{Name: codeCSPDirectiveDefaultSrc, Value: codeCSPSelf},
+		{Name: "frame-src", Value: codeCSPNone},
+		{Name: "object-src", Value: codeCSPNone},
 		{Name: "style-src", Value: "'self' 'nonce-%s'"},
-		{Name: "frame-ancestors", Value: "'none'"},
-		{Name: "base-uri", Value: "'self'"},
+		{Name: "frame-ancestors", Value: codeCSPNone},
+		{Name: "base-uri", Value: codeCSPSelf},
 	}
 
-	codeCSPValuesProduction = []CSPValue{}
+	codeCSPValuesProduction = []CSPValue{
+		{Name: "connect-src", Value: codeCSPSelf},
+		{Name: "script-src", Value: codeCSPSelf},
+	}
 
-	codeCSPValuesDevelopment = []CSPValue{}
+	codeCSPValuesDevelopment = []CSPValue{
+		{Name: codeCSPDirectiveDefaultSrc, Value: codeCSPDevelopmentDefaultSrc},
+	}
 )

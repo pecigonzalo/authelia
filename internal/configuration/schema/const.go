@@ -1,15 +1,56 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package schema
 
 import (
 	"errors"
 	"regexp"
+	"slices"
 	"time"
+
+	"github.com/valyala/fasthttp"
 )
+
+// Provider names, used by the startup checks and the verbose health check endpoint.
+const (
+	ProviderNameNTP              = "ntp"
+	ProviderNameStorage          = "storage"
+	ProviderNameUser             = "user"
+	ProviderNameCache            = "cache"
+	ProviderNameNotification     = "notification"
+	ProviderNameExpressions      = "expressions"
+	ProviderNameDuo              = "duo"
+	ProviderNameWebAuthnMetaData = "webauthn-metadata"
+)
+
+const (
+	// SessionStorageInternal stores sessions in the storage backend.
+	SessionStorageInternal = "internal"
+
+	// SessionStorageCache stores sessions in the cache backend.
+	SessionStorageCache = "cache"
+)
+
+// ProviderNames are every provider which can be probed by name.
+var ProviderNames = []string{
+	ProviderNameStorage, ProviderNameCache, ProviderNameUser, ProviderNameNotification,
+	ProviderNameNTP, ProviderNameExpressions, ProviderNameDuo, ProviderNameWebAuthnMetaData,
+}
 
 const (
 	argon2   = "argon2"
 	argon2id = "argon2id"
-	sha512   = "sha512"
+)
+
+// Lower case hash algorithm name strings.
+const (
+	SHA1Lower   = "sha1"
+	SHA224Lower = "sha224"
+	SHA256Lower = "sha256"
+	SHA384Lower = "sha384"
+	SHA512Lower = "sha512"
 )
 
 const (
@@ -41,21 +82,86 @@ const (
 	Version10 = "1.0"
 )
 
+// HTTP request methods defined by RFC4918 (WebDAV).
+const (
+	MethodCopy      = "COPY"
+	MethodLock      = "LOCK"
+	MethodMkCol     = "MKCOL"
+	MethodMove      = "MOVE"
+	MethodPropFind  = "PROPFIND"
+	MethodPropPatch = "PROPPATCH"
+	MethodUnlock    = "UNLOCK"
+)
+
+// HTTP request methods registered in the IANA HTTP Method Registry not otherwise defined by RFC7231 or RFC4918.
+const (
+	MethodACL               = "ACL"
+	MethodBaselineControl   = "BASELINE-CONTROL"
+	MethodBind              = "BIND"
+	MethodCheckIn           = "CHECKIN"
+	MethodCheckOut          = "CHECKOUT"
+	MethodLabel             = "LABEL"
+	MethodLink              = "LINK"
+	MethodMerge             = "MERGE"
+	MethodMkActivity        = "MKACTIVITY"
+	MethodMkCalendar        = "MKCALENDAR"
+	MethodMkRedirectRef     = "MKREDIRECTREF"
+	MethodMkWorkspace       = "MKWORKSPACE"
+	MethodOrderPatch        = "ORDERPATCH"
+	MethodPri               = "PRI"
+	MethodQuery             = "QUERY"
+	MethodRebind            = "REBIND"
+	MethodReport            = "REPORT"
+	MethodSearch            = "SEARCH"
+	MethodUnbind            = "UNBIND"
+	MethodUnCheckOut        = "UNCHECKOUT"
+	MethodUnlink            = "UNLINK"
+	MethodUpdate            = "UPDATE"
+	MethodUpdateRedirectRef = "UPDATEREDIRECTREF"
+	MethodVersionControl    = "VERSION-CONTROL"
+)
+
+var (
+	// HTTPMethodsRFC7231 is the list of HTTP request methods defined by RFC7231 and RFC5789.
+	HTTPMethodsRFC7231 = []string{fasthttp.MethodGet, fasthttp.MethodHead, fasthttp.MethodPost, fasthttp.MethodPut, fasthttp.MethodPatch, fasthttp.MethodDelete, fasthttp.MethodTrace, fasthttp.MethodConnect, fasthttp.MethodOptions}
+
+	// HTTPMethodsRFC4918 is the list of HTTP request methods defined by RFC4918 (WebDAV).
+	HTTPMethodsRFC4918 = []string{MethodCopy, MethodLock, MethodMkCol, MethodMove, MethodPropFind, MethodPropPatch, MethodUnlock}
+
+	// HTTPMethodsIANA is the list of HTTP request methods registered in the IANA HTTP Method Registry not otherwise
+	// defined by RFC7231 or RFC4918.
+	HTTPMethodsIANA = []string{MethodACL, MethodBaselineControl, MethodBind, MethodCheckIn, MethodCheckOut, MethodLabel, MethodLink, MethodMerge, MethodMkActivity, MethodMkCalendar, MethodMkRedirectRef, MethodMkWorkspace, MethodOrderPatch, MethodPri, MethodQuery, MethodRebind, MethodReport, MethodSearch, MethodUnbind, MethodUnCheckOut, MethodUnlink, MethodUpdate, MethodUpdateRedirectRef, MethodVersionControl}
+
+	// HTTPMethods is the list of all HTTP request methods supported by Authelia.
+	HTTPMethods = slices.Concat(HTTPMethodsRFC7231, HTTPMethodsRFC4918, HTTPMethodsIANA)
+)
+
 // ErrTLSVersionNotSupported returned when an unknown TLS version supplied.
 var ErrTLSVersionNotSupported = errors.New("supplied tls version isn't supported")
-
-// ProfileRefreshDisabled represents a Value for refresh_interval that disables the check entirely.
-const ProfileRefreshDisabled = "disable"
 
 const (
 	// ProfileRefreshAlways represents a value for refresh_interval that's the same as 0ms.
 	ProfileRefreshAlways = "always"
 
-	// RefreshIntervalDefault represents the default value of refresh_interval.
-	RefreshIntervalDefault = "5m"
+	// ProfileRefreshDisabled represents a Value for refresh_interval that disables the check entirely.
+	ProfileRefreshDisabled = "disable"
 
-	// RefreshIntervalAlways represents the duration value refresh interval should have if set to always.
-	RefreshIntervalAlways = 0 * time.Millisecond
+	// RefreshIntervalDefault represents the default value of refresh_interval.
+	RefreshIntervalDefault = time.Minute * 5
+)
+
+const (
+	// HeaderRemoteUser is the header which by default communicates the username of the authenticated user.
+	HeaderRemoteUser = "Remote-User"
+
+	// HeaderRemoteGroups is the header which by default communicates the groups of the authenticated user.
+	HeaderRemoteGroups = "Remote-Groups"
+
+	// HeaderRemoteName is the header which by default communicates the display name of the authenticated user.
+	HeaderRemoteName = "Remote-Name"
+
+	// HeaderRemoteEmail is the header which by default communicates the email of the authenticated user.
+	HeaderRemoteEmail = "Remote-Email"
 )
 
 const (
@@ -76,6 +182,14 @@ const (
 
 	// LDAPImplementationGLAuth is the string for the GLAuth LDAP implementation.
 	LDAPImplementationGLAuth = "glauth"
+)
+
+const (
+	// LDAPGroupSearchModeFilter is the string for the filter group search mode.
+	LDAPGroupSearchModeFilter = "filter"
+
+	// LDAPGroupSearchModeMemberOf is the string for the memberOf group search mode.
+	LDAPGroupSearchModeMemberOf = "memberof"
 )
 
 // TOTP Algorithm.
@@ -103,19 +217,84 @@ const (
 	TOTPSecretSizeMinimum = 20
 )
 
-// regexpHasScheme checks if a string has a scheme. Valid characters for schemes include alphanumeric, hyphen,
-// period, and plus characters.
-var regexpHasScheme = regexp.MustCompile(`^[-+.a-zA-Z\d]+://`)
+var (
+	// regexpHasScheme checks if a string has a scheme. Valid characters for schemes include alphanumeric, hyphen,
+	// period, and plus characters.
+	regexpHasScheme = regexp.MustCompile(`^[-+.a-zA-Z\d]*(://|:$)`)
 
-const (
-	blockCERTIFICATE   = "CERTIFICATE"
-	blockRSAPRIVATEKEY = "RSA PRIVATE KEY"
+	regexpIsUmask = regexp.MustCompile(`^[0-7]{3,4}$`)
 )
 
 const (
-	ldapAttrMail        = "mail"
-	ldapAttrUserID      = "uid"
-	ldapAttrDisplayName = "displayName"
-	ldapAttrDescription = "description"
-	ldapAttrCommonName  = "cn"
+	policyTwoFactor = "two_factor"
+)
+
+const (
+	addressQueryParamUmask = "umask"
+	addressQueryParamPath  = "path"
+)
+
+const (
+	blockCERTIFICATE = "CERTIFICATE"
+)
+
+// Authorization Schemes.
+const (
+	SchemeBasic  = "basic"
+	SchemeBearer = "bearer"
+)
+
+// Authz values.
+const (
+	AuthzEndpointNameLegacy      = "legacy"
+	AuthzEndpointNameAuthRequest = "auth-request"
+	AuthzEndpointNameExtAuthz    = "ext-authz"
+	AuthzEndpointNameForwardAuth = "forward-auth"
+
+	AuthzImplementationLegacy      = "Legacy"
+	AuthzImplementationAuthRequest = "AuthRequest"
+	AuthzImplementationExtAuthz    = "ExtAuthz"
+	AuthzImplementationForwardAuth = "ForwardAuth"
+
+	AuthzStrategyHeaderCookieSession                 = "CookieSession"
+	AuthzStrategyHeaderAuthorization                 = "HeaderAuthorization"
+	AuthzStrategyHeaderProxyAuthorization            = "HeaderProxyAuthorization"
+	AuthzStrategyHeaderAuthRequestProxyAuthorization = "HeaderAuthRequestProxyAuthorization"
+	AuthzStrategyHeaderLegacy                        = "HeaderLegacy"
+)
+
+const (
+	ldapGroupSearchModeFilter = "filter"
+)
+
+const (
+	ldapAttrDistinguishedName = "distinguishedName"
+	ldapAttrMail              = "mail"
+	ldapAttrUserID            = "uid"
+	ldapAttrSAMAccountName    = "sAMAccountName"
+	ldapAttrDisplayName       = "displayName"
+	ldapAttrSurname           = "sn"
+	ldapAttrGivenName         = "givenName"
+	ldapAttrMiddleName        = "middleName"
+	ldapAttrDescription       = "description"
+	ldapAttrCommonName        = "cn"
+	ldapAttrMemberOf          = "memberOf"
+)
+
+// Address Schemes.
+const (
+	AddressSchemeTCP            = "tcp"
+	AddressSchemeTCP4           = "tcp4"
+	AddressSchemeTCP6           = "tcp6"
+	AddressSchemeUDP            = "udp"
+	AddressSchemeUDP4           = "udp4"
+	AddressSchemeUDP6           = "udp6"
+	AddressSchemeUnix           = "unix"
+	AddressSchemeLDAP           = "ldap"
+	AddressSchemeLDAPS          = "ldaps"
+	AddressSchemeLDAPI          = "ldapi"
+	AddressSchemeSMTP           = "smtp"
+	AddressSchemeSUBMISSION     = "submission"
+	AddressSchemeSUBMISSIONS    = "submissions"
+	AddressSchemeFileDescriptor = "fd"
 )

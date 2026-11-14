@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -21,8 +25,7 @@ func NewRegulationScenario() *RegulationScenario {
 }
 
 func (s *RegulationScenario) SetupSuite() {
-	browser, err := StartRod()
-
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -31,16 +34,14 @@ func (s *RegulationScenario) SetupSuite() {
 }
 
 func (s *RegulationScenario) TearDownSuite() {
-	err := s.RodSession.Stop()
-
+	err := s.Stop()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
 func (s *RegulationScenario) SetupTest() {
-	s.Page = s.doCreateTab(s.T(), HomeBaseURL)
-	s.verifyIsHome(s.T(), s.Page)
+	s.doSetupTest(HomeBaseURL)
 }
 
 func (s *RegulationScenario) TearDownTest() {
@@ -50,6 +51,7 @@ func (s *RegulationScenario) TearDownTest() {
 
 func (s *RegulationScenario) TestShouldBanUserAfterTooManyAttempt() {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
@@ -57,21 +59,19 @@ func (s *RegulationScenario) TestShouldBanUserAfterTooManyAttempt() {
 
 	s.doVisitLoginPage(s.T(), s.Context(ctx), BaseDomain, "")
 	s.doFillLoginPageAndClick(s.T(), s.Context(ctx), "john", "bad-password", false)
-	s.verifyNotificationDisplayed(s.T(), s.Context(ctx), "Incorrect username or password.")
+	s.verifyNotificationDisplayed(s.T(), s.Context(ctx), "Incorrect username or password")
 
 	for i := 0; i < 3; i++ {
 		err := s.WaitElementLocatedByID(s.T(), s.Context(ctx), "password-textfield").Input("bad-password")
 		require.NoError(s.T(), err)
-		err = s.WaitElementLocatedByID(s.T(), s.Context(ctx), "sign-in-button").Click("left", 1)
-		require.NoError(s.T(), err)
+		s.ClickElementLocatedByID(s.T(), s.Context(ctx), "sign-in-button")
 	}
 
 	// Enter the correct password and test the regulation lock out.
 	err := s.WaitElementLocatedByID(s.T(), s.Context(ctx), "password-textfield").Input("password")
 	require.NoError(s.T(), err)
-	err = s.WaitElementLocatedByID(s.T(), s.Context(ctx), "sign-in-button").Click("left", 1)
-	require.NoError(s.T(), err)
-	s.verifyNotificationDisplayed(s.T(), s.Context(ctx), "Incorrect username or password.")
+	s.ClickElementLocatedByID(s.T(), s.Context(ctx), "sign-in-button")
+	s.verifyNotificationDisplayed(s.T(), s.Context(ctx), "Incorrect username or password")
 
 	s.verifyIsFirstFactorPage(s.T(), s.Context(ctx))
 	time.Sleep(10 * time.Second)
@@ -79,8 +79,7 @@ func (s *RegulationScenario) TestShouldBanUserAfterTooManyAttempt() {
 	// Enter the correct password and test a successful login.
 	err = s.WaitElementLocatedByID(s.T(), s.Context(ctx), "password-textfield").Input("password")
 	require.NoError(s.T(), err)
-	err = s.WaitElementLocatedByID(s.T(), s.Context(ctx), "sign-in-button").Click("left", 1)
-	require.NoError(s.T(), err)
+	s.ClickElementLocatedByID(s.T(), s.Context(ctx), "sign-in-button")
 	s.verifyIsSecondFactorPage(s.T(), s.Context(ctx))
 }
 

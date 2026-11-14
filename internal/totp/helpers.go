@@ -1,7 +1,11 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package totp
 
 import (
-	"github.com/pquerna/otp"
+	"github.com/authelia/otp"
 
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
 )

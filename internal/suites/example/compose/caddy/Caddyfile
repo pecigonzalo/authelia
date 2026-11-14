@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
 (tls-transport) {
 	transport http {
 		tls
@@ -14,7 +18,7 @@
 }
 
 login.example.com:8080 {
-	tls internal
+	tls /pki/public.crt /pki/private.pem
 	log
 	route {
 		reverse_proxy /.well-known/* authelia-backend:9091 {
@@ -45,18 +49,24 @@ login.example.com:8080 {
 			fail_duration 10s
 			max_fails 1
 			unhealthy_status 5xx
+
+			health_uri /
+			health_interval 2s
+			health_headers {
+				Host login.example.com
+			}
 		}
 	}
 }
 
 mail.example.com:8080 {
-	tls internal
+	tls /pki/public.crt /pki/private.pem
 	log
-	reverse_proxy smtp:1080
+	reverse_proxy smtp:8025
 }
 
 *.example.com:8080 {
-	tls internal
+	tls /pki/public.crt /pki/private.pem
 	log
 	forward_auth authelia-backend:9091 {
 		uri /api/authz/caddy
@@ -64,6 +74,6 @@ mail.example.com:8080 {
 		import tls-transport
 	}
 
-	reverse_proxy /headers httpbin:8000
+	reverse_proxy /headers httpbin:8080
 	reverse_proxy nginx-backend
 }

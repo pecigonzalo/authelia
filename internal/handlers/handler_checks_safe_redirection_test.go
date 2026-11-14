@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package handlers
 
 import (
@@ -6,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/valyala/fasthttp"
 
-	"github.com/authelia/authelia/v4/internal/authentication"
+	"github.com/authelia/authelia/v4/internal/authorization"
 	"github.com/authelia/authelia/v4/internal/mocks"
 	"github.com/authelia/authelia/v4/internal/session"
 )
@@ -21,35 +25,35 @@ func TestCheckSafeRedirection(t *testing.T) {
 	}{
 		{
 			"ShouldReturnUnauthorized",
-			session.UserSession{CookieDomain: "example.com", AuthenticationLevel: authentication.NotAuthenticated},
+			session.UserSession{CookieDomain: "example.com"},
 			"http://myapp.example.com",
 			fasthttp.StatusUnauthorized,
 			false,
 		},
 		{
 			"ShouldReturnTrueOnGoodDomain",
-			session.UserSession{CookieDomain: "example.com", Username: "john", AuthenticationLevel: authentication.OneFactor},
+			session.UserSession{CookieDomain: "example.com", Username: "john", AuthenticationMethodRefs: authorization.AuthenticationMethodsReferences{UsernameAndPassword: true}},
 			"https://myapp.example.com",
 			fasthttp.StatusOK,
 			true,
 		},
 		{
 			"ShouldReturnFalseOnGoodDomainWithBadScheme",
-			session.UserSession{CookieDomain: "example.com", Username: "john", AuthenticationLevel: authentication.OneFactor},
+			session.UserSession{CookieDomain: "example.com", Username: "john", AuthenticationMethodRefs: authorization.AuthenticationMethodsReferences{UsernameAndPassword: true}},
 			"http://myapp.example.com",
 			fasthttp.StatusOK,
 			false,
 		},
 		{
 			"ShouldReturnFalseOnBadDomainWithGoodScheme",
-			session.UserSession{CookieDomain: "example.com", Username: "john", AuthenticationLevel: authentication.OneFactor},
+			session.UserSession{CookieDomain: "example.com", Username: "john", AuthenticationMethodRefs: authorization.AuthenticationMethodsReferences{UsernameAndPassword: true}},
 			"https://myapp.notgood.com",
 			fasthttp.StatusOK,
 			false,
 		},
 		{
 			"ShouldReturnFalseOnBadDomainWithBadScheme",
-			session.UserSession{CookieDomain: "example.com", Username: "john", AuthenticationLevel: authentication.OneFactor},
+			session.UserSession{CookieDomain: "example.com", Username: "john", AuthenticationMethodRefs: authorization.AuthenticationMethodsReferences{UsernameAndPassword: true}},
 			"http://myapp.notgood.com",
 			fasthttp.StatusOK,
 			false,
@@ -80,33 +84,53 @@ func TestCheckSafeRedirection(t *testing.T) {
 
 func TestShouldFailOnInvalidBody(t *testing.T) {
 	mock := mocks.NewMockAutheliaCtxWithUserSession(t, session.UserSession{
-		CookieDomain:        exampleDotCom,
-		Username:            "john",
-		AuthenticationLevel: authentication.OneFactor,
+		CookieDomain: exampleDotCom,
+		Username:     "john",
+		AuthenticationMethodRefs: authorization.AuthenticationMethodsReferences{
+			UsernameAndPassword: true,
+		},
 	})
 
 	defer mock.Close()
-	mock.Ctx.Configuration.Session.Domain = exampleDotCom
+
+	mock.Ctx.Configuration.Session.Domain = exampleDotCom //nolint:staticcheck
 
 	mock.SetRequestBody(t, "not a valid json")
 
 	CheckSafeRedirectionPOST(mock.Ctx)
-	mock.Assert200KO(t, "Operation failed.")
+	mock.Assert200KO(t, messageOperationFailed)
+	AssertLogEntryMessageAndError(t, mock.Hook.LastEntry(), "Error occurred parsing the safe redirection request body", "unable to parse body: json: cannot unmarshal string into Go value of type handlers.checkURIWithinDomainRequestBody")
+}
+
+func TestShouldFailOnGetSessionError(t *testing.T) {
+	mock := mocks.NewMockAutheliaCtx(t)
+
+	defer mock.Close()
+
+	mock.Ctx.Request.Header.Set("X-Original-URL", "https://auth.notexample.com")
+
+	CheckSafeRedirectionPOST(mock.Ctx)
+
+	assert.Equal(t, fasthttp.StatusUnauthorized, mock.Ctx.Response.StatusCode())
 }
 
 func TestShouldFailOnInvalidURL(t *testing.T) {
 	mock := mocks.NewMockAutheliaCtxWithUserSession(t, session.UserSession{
-		CookieDomain:        exampleDotCom,
-		Username:            "john",
-		AuthenticationLevel: authentication.OneFactor,
+		CookieDomain: exampleDotCom,
+		Username:     "john",
+		AuthenticationMethodRefs: authorization.AuthenticationMethodsReferences{
+			UsernameAndPassword: true,
+		},
 	})
 	defer mock.Close()
-	mock.Ctx.Configuration.Session.Domain = exampleDotCom
+
+	mock.Ctx.Configuration.Session.Domain = exampleDotCom //nolint:staticcheck
 
 	mock.SetRequestBody(t, checkURIWithinDomainRequestBody{
 		URI: "https//invalid-url",
 	})
 
 	CheckSafeRedirectionPOST(mock.Ctx)
-	mock.Assert200KO(t, "Operation failed.")
+	mock.Assert200KO(t, messageOperationFailed)
+	AssertLogEntryMessageAndError(t, mock.Hook.LastEntry(), "Error occurred determining if the URI 'https//invalid-url' is safe to redirect to as it could not be parsed", "parse \"https//invalid-url\": invalid URI for request")
 }

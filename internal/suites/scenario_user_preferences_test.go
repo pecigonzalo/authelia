@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -20,8 +24,7 @@ func NewUserPreferencesScenario() *UserPreferencesScenario {
 }
 
 func (s *UserPreferencesScenario) SetupSuite() {
-	browser, err := StartRod()
-
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -30,16 +33,14 @@ func (s *UserPreferencesScenario) SetupSuite() {
 }
 
 func (s *UserPreferencesScenario) TearDownSuite() {
-	err := s.RodSession.Stop()
-
+	err := s.Stop()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
 func (s *UserPreferencesScenario) SetupTest() {
-	s.Page = s.doCreateTab(s.T(), HomeBaseURL)
-	s.verifyIsHome(s.T(), s.Page)
+	s.doSetupTest(HomeBaseURL)
 }
 
 func (s *UserPreferencesScenario) TearDownTest() {
@@ -49,16 +50,15 @@ func (s *UserPreferencesScenario) TearDownTest() {
 
 func (s *UserPreferencesScenario) TestShouldRememberLastUsed2FAMethod() {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)
 	}()
 
-	// Authenticate.
 	s.doLoginOneFactor(s.T(), s.Context(ctx), "john", "password", false, BaseDomain, "")
 	s.verifyIsSecondFactorPage(s.T(), s.Context(ctx))
 
-	// Then switch to push notification method.
 	s.doChangeMethod(s.T(), s.Context(ctx), "push-notification")
 	s.WaitElementLocatedByID(s.T(), s.Context(ctx), "push-notification-method")
 
@@ -66,24 +66,19 @@ func (s *UserPreferencesScenario) TestShouldRememberLastUsed2FAMethod() {
 	s.doVisit(s.T(), s.Context(ctx), HomeBaseURL)
 	s.verifyIsHome(s.T(), s.Context(ctx))
 
-	// Then go back to portal.
 	s.doVisit(s.T(), s.Context(ctx), GetLoginBaseURL(BaseDomain))
 	s.verifyIsSecondFactorPage(s.T(), s.Context(ctx))
-	// And check the latest method is still used.
 	s.WaitElementLocatedByID(s.T(), s.Context(ctx), "push-notification-method")
-	// Meaning the authentication is successful.
 	s.verifyIsHome(s.T(), s.Context(ctx))
 
-	// Logout the user and see what user 'harry' sees.
 	s.doLogout(s.T(), s.Context(ctx))
 	s.doLoginOneFactor(s.T(), s.Context(ctx), "harry", "password", false, BaseDomain, "")
 	s.verifyIsSecondFactorPage(s.T(), s.Context(ctx))
-	s.WaitElementLocatedByID(s.T(), s.Context(ctx), "one-time-password-method")
+	s.WaitElementLocatedByID(s.T(), s.Context(ctx), "push-notification-method")
 
 	s.doLogout(s.T(), s.Context(ctx))
 	s.verifyIsFirstFactorPage(s.T(), s.Context(ctx))
 
-	// Then log back as previous user and verify the push notification is still the default method.
 	s.doLoginOneFactor(s.T(), s.Context(ctx), "john", "password", false, BaseDomain, "")
 	s.verifyIsSecondFactorPage(s.T(), s.Context(ctx))
 	s.WaitElementLocatedByID(s.T(), s.Context(ctx), "push-notification-method")

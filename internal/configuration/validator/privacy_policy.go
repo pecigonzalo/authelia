@@ -1,6 +1,11 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package validator
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
@@ -14,7 +19,7 @@ func ValidatePrivacyPolicy(config *schema.PrivacyPolicy, validator *schema.Struc
 
 	switch config.PolicyURL {
 	case nil:
-		validator.Push(fmt.Errorf(errPrivacyPolicyEnabledWithoutURL))
+		validator.Push(errors.New(errPrivacyPolicyEnabledWithoutURL))
 	default:
 		if config.PolicyURL.Scheme != schemeHTTPS {
 			validator.Push(fmt.Errorf(errFmtPrivacyPolicyURLNotHTTPS, config.PolicyURL.Scheme))

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -16,10 +20,11 @@ var (
 	tmplGitHubIssueTemplateBug      = template.Must(newTMPL("github_issue_template_bug_report.yml"))
 	tmplIssueTemplateFeature        = template.Must(newTMPL("github_issue_template_feature.yml"))
 	tmplWebI18NIndex                = template.Must(newTMPL("web_i18n_index.ts"))
-	tmplDotCommitLintRC             = template.Must(newTMPL("dot_commitlintrc.js"))
+	tmplDotCommitLintRC             = template.Must(newTMPL("dot_commitlintrc.cjs"))
 	tmplDocsCommitMessageGuidelines = template.Must(newTMPL("docs-contributing-development-commitmsg.md"))
 	tmplScriptsGen                  = template.Must(newTMPL("cmd-authelia-scripts-gen.go"))
 	tmplServer                      = template.Must(newTMPL("server_gen.go"))
+	tmplADR                         = template.Must(newTMPL("docs-architectural_design_record.md"))
 )
 
 func newTMPL(name string) (tmpl *template.Template, err error) {
@@ -35,7 +40,6 @@ func mustLoadTmplFS(tmpl string) string {
 		content []byte
 		err     error
 	)
-
 	if content, err = templatesFS.ReadFile(fmt.Sprintf("templates/%s.tmpl", tmpl)); err != nil {
 		panic(err)
 	}

@@ -1,7 +1,15 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package validator
 
 import (
+	"fmt"
+	"net"
 	"os"
+	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -22,51 +30,391 @@ func TestShouldSetDefaultServerValues(t *testing.T) {
 	assert.Len(t, validator.Errors(), 0)
 	assert.Len(t, validator.Warnings(), 0)
 
-	assert.Equal(t, schema.DefaultServerConfiguration.Host, config.Server.Host)
-	assert.Equal(t, schema.DefaultServerConfiguration.Port, config.Server.Port)
+	assert.Equal(t, schema.DefaultServerConfiguration.Address, config.Server.Address)
 	assert.Equal(t, schema.DefaultServerConfiguration.Buffers.Read, config.Server.Buffers.Read)
 	assert.Equal(t, schema.DefaultServerConfiguration.Buffers.Write, config.Server.Buffers.Write)
+	assert.Equal(t, schema.DefaultServerConfiguration.Timeouts.Read, config.Server.Timeouts.Read)
+	assert.Equal(t, schema.DefaultServerConfiguration.Timeouts.Write, config.Server.Timeouts.Write)
+	assert.Equal(t, schema.DefaultServerConfiguration.Timeouts.Idle, config.Server.Timeouts.Idle)
 	assert.Equal(t, schema.DefaultServerConfiguration.TLS.Key, config.Server.TLS.Key)
 	assert.Equal(t, schema.DefaultServerConfiguration.TLS.Certificate, config.Server.TLS.Certificate)
-	assert.Equal(t, schema.DefaultServerConfiguration.Path, config.Server.Path)
 	assert.Equal(t, schema.DefaultServerConfiguration.Endpoints.EnableExpvars, config.Server.Endpoints.EnableExpvars)
 	assert.Equal(t, schema.DefaultServerConfiguration.Endpoints.EnablePprof, config.Server.Endpoints.EnablePprof)
 	assert.Equal(t, schema.DefaultServerConfiguration.Endpoints.Authz, config.Server.Endpoints.Authz)
 }
 
-func TestShouldSetDefaultConfig(t *testing.T) {
-	validator := schema.NewStructValidator()
-	config := &schema.Configuration{}
-
-	ValidateServer(config, validator)
-
-	assert.Len(t, validator.Errors(), 0)
-	assert.Len(t, validator.Warnings(), 0)
-
-	assert.Equal(t, schema.DefaultServerConfiguration.Buffers.Read, config.Server.Buffers.Read)
-	assert.Equal(t, schema.DefaultServerConfiguration.Buffers.Write, config.Server.Buffers.Write)
-}
-
-func TestShouldParsePathCorrectly(t *testing.T) {
-	validator := schema.NewStructValidator()
-	config := &schema.Configuration{
-		Server: schema.ServerConfiguration{
-			Path: "apple",
+func TestShouldSetDefaultConfigRateLimits(t *testing.T) {
+	testCases := []struct {
+		name     string
+		config   *schema.Configuration
+		expected schema.ServerEndpointRateLimits
+	}{
+		{
+			name: "ShouldSetDefaults",
+			config: &schema.Configuration{
+				IdentityValidation: schema.IdentityValidation{
+					ResetPassword: schema.IdentityValidationResetPassword{
+						JWTSecret: "dfgdfgdzfgdgdfgdfg",
+					},
+				},
+			},
+			expected: schema.ServerEndpointRateLimits{
+				Health: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 1 * time.Minute, Requests: 60},
+					},
+				},
+				ResetPasswordStart: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 10 * time.Minute, Requests: 5},
+						{Period: 15 * time.Minute, Requests: 10},
+						{Period: 30 * time.Minute, Requests: 15},
+					},
+				},
+				ResetPasswordFinish: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 1 * time.Minute, Requests: 10},
+						{Period: 2 * time.Minute, Requests: 15},
+					},
+				},
+				SecondFactorTOTP: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 1 * time.Minute, Requests: 30},
+						{Period: 2 * time.Minute, Requests: 40},
+						{Period: 10 * time.Minute, Requests: 50},
+					},
+				},
+				SecondFactorDuo: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 1 * time.Minute, Requests: 10},
+						{Period: 2 * time.Minute, Requests: 15},
+					},
+				},
+				SecondFactorRecoveryCode: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 1 * time.Minute, Requests: 10},
+						{Period: 2 * time.Minute, Requests: 15},
+					},
+				},
+				SecondFactorPassword: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 5 * time.Minute, Requests: 30},
+						{Period: 60 * time.Minute, Requests: 40},
+					},
+				},
+				SessionElevationStart: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: schema.DefaultIdentityValidation.ElevatedSession.CodeLifespan * 1, Requests: 3},
+						{Period: schema.DefaultIdentityValidation.ElevatedSession.CodeLifespan * 2, Requests: 5},
+						{Period: schema.DefaultIdentityValidation.ElevatedSession.CodeLifespan * 12, Requests: 15},
+					},
+				},
+				SessionElevationFinish: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: schema.DefaultIdentityValidation.ElevatedSession.ElevationLifespan * 1, Requests: 3},
+						{Period: schema.DefaultIdentityValidation.ElevatedSession.ElevationLifespan * 2, Requests: 5},
+						{Period: schema.DefaultIdentityValidation.ElevatedSession.ElevationLifespan * 6, Requests: 15},
+					},
+				},
+				OpenIDConnectToken: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 1 * time.Minute, Requests: 30},
+						{Period: 2 * time.Minute, Requests: 40},
+						{Period: 10 * time.Minute, Requests: 50},
+						{Period: time.Hour, Requests: 100},
+					},
+				},
+				OpenIDConnectPushedAuthorizationRequest: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 1 * time.Minute, Requests: 30},
+						{Period: 2 * time.Minute, Requests: 40},
+						{Period: 10 * time.Minute, Requests: 50},
+						{Period: time.Hour, Requests: 100},
+					},
+				},
+				OpenIDConnectUserInfo: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 1 * time.Minute, Requests: 30},
+						{Period: 2 * time.Minute, Requests: 40},
+						{Period: 10 * time.Minute, Requests: 50},
+						{Period: time.Hour, Requests: 100},
+					},
+				},
+				OpenIDConnectIntrospection: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 1 * time.Minute, Requests: 30},
+						{Period: 2 * time.Minute, Requests: 40},
+						{Period: 10 * time.Minute, Requests: 50},
+						{Period: time.Hour, Requests: 100},
+					},
+				},
+				OpenIDConnectRevocation: schema.ServerEndpointRateLimit{
+					IPv6Mask: 64,
+					Buckets: []schema.ServerEndpointRateLimitBucket{
+						{Period: 1 * time.Minute, Requests: 30},
+						{Period: 2 * time.Minute, Requests: 40},
+						{Period: 10 * time.Minute, Requests: 50},
+						{Period: time.Hour, Requests: 100},
+					},
+				},
+			},
 		},
 	}
 
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			validator := schema.NewStructValidator()
+
+			ValidateIdentityValidation(tc.config, validator)
+			ValidateServer(tc.config, validator)
+
+			assert.Len(t, validator.Errors(), 0)
+			assert.Len(t, validator.Warnings(), 0)
+
+			assert.Equal(t, tc.expected, tc.config.Server.Endpoints.RateLimits)
+		})
+	}
+}
+
+func TestValidateRateLimitErrors(t *testing.T) {
+	have := &schema.Configuration{
+		Server: schema.Server{
+			Endpoints: schema.ServerEndpoints{
+				RateLimits: schema.ServerEndpointRateLimits{
+					ResetPasswordStart: schema.ServerEndpointRateLimit{
+						Buckets: []schema.ServerEndpointRateLimitBucket{
+							{Period: time.Second, Requests: 5},
+						},
+					},
+					ResetPasswordFinish: schema.ServerEndpointRateLimit{
+						Buckets: []schema.ServerEndpointRateLimitBucket{
+							{Period: time.Second, Requests: 5},
+						},
+					},
+					SecondFactorTOTP: schema.ServerEndpointRateLimit{
+						Buckets: []schema.ServerEndpointRateLimitBucket{
+							{Period: time.Second, Requests: 5},
+						},
+					},
+					SecondFactorDuo: schema.ServerEndpointRateLimit{
+						Buckets: []schema.ServerEndpointRateLimitBucket{
+							{Period: time.Second, Requests: 5},
+						},
+					},
+					SessionElevationStart: schema.ServerEndpointRateLimit{
+						Buckets: []schema.ServerEndpointRateLimitBucket{
+							{Period: time.Second, Requests: 5},
+						},
+					},
+					SessionElevationFinish: schema.ServerEndpointRateLimit{
+						Buckets: []schema.ServerEndpointRateLimitBucket{
+							{Period: time.Duration(0), Requests: 0},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	validator := schema.NewStructValidator()
+
+	ValidateServer(have, validator)
+
+	require.Len(t, validator.Errors(), 7)
+	assert.EqualError(t, validator.Errors()[0], "server: endpoints: rate_limits: reset_password_start: bucket 1: option 'period' has a value of '1s' but it must be greater than 10 seconds")
+	assert.EqualError(t, validator.Errors()[1], "server: endpoints: rate_limits: reset_password_finish: bucket 1: option 'period' has a value of '1s' but it must be greater than 10 seconds")
+	assert.EqualError(t, validator.Errors()[2], "server: endpoints: rate_limits: second_factor_totp: bucket 1: option 'period' has a value of '1s' but it must be greater than 10 seconds")
+	assert.EqualError(t, validator.Errors()[3], "server: endpoints: rate_limits: second_factor_duo: bucket 1: option 'period' has a value of '1s' but it must be greater than 10 seconds")
+	assert.EqualError(t, validator.Errors()[4], "server: endpoints: rate_limits: session_elevation_start: bucket 1: option 'period' has a value of '1s' but it must be greater than 10 seconds")
+	assert.EqualError(t, validator.Errors()[5], "server: endpoints: rate_limits: session_elevation_finish: bucket 1: option 'period' must have a value")
+	assert.EqualError(t, validator.Errors()[6], "server: endpoints: rate_limits: session_elevation_finish: bucket 1: option 'requests' has a value of '0' but it must be greater than 1")
+}
+
+func TestValidateRateLimitIPv6Mask(t *testing.T) {
+	testCases := []struct {
+		name     string
+		have     int
+		expected int
+		err      string
+	}{
+		{"ShouldSetDefault", 0, 64, ""},
+		{"ShouldAllowMinimum", 48, 48, ""},
+		{"ShouldAllowCustom", 56, 56, ""},
+		{"ShouldAllowMaximum", 128, 128, ""},
+		{"ShouldErrorBelowMinimum", 47, 47, "server: endpoints: rate_limits: %s: option 'ipv6_mask' has a value of '47' but it must be between 48 and 128"},
+		{"ShouldErrorAboveMaximum", 129, 129, "server: endpoints: rate_limits: %s: option 'ipv6_mask' has a value of '129' but it must be between 48 and 128"},
+		{"ShouldErrorNegative", -1, -1, "server: endpoints: rate_limits: %s: option 'ipv6_mask' has a value of '-1' but it must be between 48 and 128"},
+	}
+
+	endpoints := []struct {
+		name     string
+		endpoint func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit
+	}{
+		{"reset_password_start", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.ResetPasswordStart
+		}},
+		{"reset_password_finish", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.ResetPasswordFinish
+		}},
+		{"second_factor_totp", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.SecondFactorTOTP
+		}},
+		{"second_factor_duo", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.SecondFactorDuo
+		}},
+		{"second_factor_recovery_code", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.SecondFactorRecoveryCode
+		}},
+		{"second_factor_password", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.SecondFactorPassword
+		}},
+		{"health", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.Health
+		}},
+		{"session_elevation_start", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.SessionElevationStart
+		}},
+		{"session_elevation_finish", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.SessionElevationFinish
+		}},
+		{"openid_connect_token", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.OpenIDConnectToken
+		}},
+		{"openid_connect_pushed_authorization_request", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.OpenIDConnectPushedAuthorizationRequest
+		}},
+		{"openid_connect_userinfo", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.OpenIDConnectUserInfo
+		}},
+		{"openid_connect_introspection", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.OpenIDConnectIntrospection
+		}},
+		{"openid_connect_revocation", func(limits *schema.ServerEndpointRateLimits) *schema.ServerEndpointRateLimit {
+			return &limits.OpenIDConnectRevocation
+		}},
+	}
+
+	for _, e := range endpoints {
+		t.Run(e.name, func(t *testing.T) {
+			for _, tc := range testCases {
+				t.Run(tc.name, func(t *testing.T) {
+					config := &schema.Configuration{}
+
+					e.endpoint(&config.Server.Endpoints.RateLimits).IPv6Mask = tc.have
+
+					validator := schema.NewStructValidator()
+
+					ValidateServer(config, validator)
+
+					assert.Equal(t, tc.expected, e.endpoint(&config.Server.Endpoints.RateLimits).IPv6Mask)
+
+					for _, other := range endpoints {
+						if other.name != e.name {
+							assert.Equal(t, 64, other.endpoint(&config.Server.Endpoints.RateLimits).IPv6Mask, other.name)
+						}
+					}
+
+					if tc.err == "" {
+						assert.Len(t, validator.Errors(), 0)
+					} else {
+						require.Len(t, validator.Errors(), 1)
+						assert.EqualError(t, validator.Errors()[0], fmt.Sprintf(tc.err, e.name))
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestValidateSeverAddress(t *testing.T) {
+	config := &schema.Configuration{
+		Server: schema.Server{
+			Address: &schema.AddressTCP{Address: MustParseAddress("tcp://:9091/path/")},
+		},
+	}
+
+	validator := schema.NewStructValidator()
 	ValidateServer(config, validator)
 
-	assert.Len(t, validator.Errors(), 0)
+	require.Len(t, validator.Errors(), 1)
 	assert.Len(t, validator.Warnings(), 0)
 
-	assert.Equal(t, "/apple", config.Server.Path)
+	assert.EqualError(t, validator.Errors()[0], "server: option 'address' must be a single subpath (i.e. '/path'), but '/path/' contains multiple segments")
+}
+
+func TestValidateServerShouldCorrectlyIdentifyValidAddressSchemes(t *testing.T) {
+	testCases := []struct {
+		have     string
+		expected string
+	}{
+		{schema.AddressSchemeTCP, ""},
+		{schema.AddressSchemeTCP4, ""},
+		{schema.AddressSchemeTCP6, ""},
+		{schema.AddressSchemeUDP, "server: option 'address' with value 'udp://:9091' is invalid: scheme must be one of 'tcp', 'tcp4', 'tcp6', 'unix', or 'fd' but is configured as 'udp'"},
+		{schema.AddressSchemeUDP4, "server: option 'address' with value 'udp4://:9091' is invalid: scheme must be one of 'tcp', 'tcp4', 'tcp6', 'unix', or 'fd' but is configured as 'udp4'"},
+		{schema.AddressSchemeUDP6, "server: option 'address' with value 'udp6://:9091' is invalid: scheme must be one of 'tcp', 'tcp4', 'tcp6', 'unix', or 'fd' but is configured as 'udp6'"},
+		{schema.AddressSchemeUnix, ""},
+		{"http", "server: option 'address' with value 'http://:9091' is invalid: scheme must be one of 'tcp', 'tcp4', 'tcp6', 'unix', or 'fd' but is configured as 'http'"},
+	}
+
+	validator := schema.NewStructValidator()
+
+	for _, tc := range testCases {
+		t.Run(tc.have, func(t *testing.T) {
+			have := &schema.Configuration{
+				Server: schema.Server{
+					Buffers: schema.ServerBuffers{
+						Read:  -1,
+						Write: -1,
+					},
+					Timeouts: schema.ServerTimeouts{
+						Read:  time.Second * -1,
+						Write: time.Second * -1,
+						Idle:  time.Second * -1,
+					},
+				},
+			}
+
+			validator.Clear()
+
+			switch tc.have {
+			case schema.AddressSchemeUnix:
+				have.Server.Address = &schema.AddressTCP{Address: schema.NewAddressUnix("/path/to/authelia.sock")}
+			default:
+				have.Server.Address = &schema.AddressTCP{Address: schema.NewAddressFromNetworkValues(tc.have, "", 9091)}
+			}
+
+			ValidateServer(have, validator)
+
+			assert.Len(t, validator.Warnings(), 0)
+
+			if tc.expected == "" {
+				assert.Len(t, validator.Errors(), 0)
+			} else {
+				require.Len(t, validator.Errors(), 1)
+				assert.EqualError(t, validator.Errors()[0], tc.expected)
+			}
+		})
+	}
 }
 
 func TestShouldDefaultOnNegativeValues(t *testing.T) {
 	validator := schema.NewStructValidator()
 	config := &schema.Configuration{
-		Server: schema.ServerConfiguration{
+		Server: schema.Server{
 			Buffers: schema.ServerBuffers{
 				Read:  -1,
 				Write: -1,
@@ -94,8 +442,10 @@ func TestShouldDefaultOnNegativeValues(t *testing.T) {
 func TestShouldRaiseOnNonAlphanumericCharsInPath(t *testing.T) {
 	validator := schema.NewStructValidator()
 	config := &schema.Configuration{
-		Server: schema.ServerConfiguration{
-			Path: "app le",
+		Server: schema.Server{
+			Address: &schema.AddressTCP{
+				Address: MustParseAddress("tcp://:9091/app-le"),
+			},
 		},
 	}
 
@@ -103,33 +453,86 @@ func TestShouldRaiseOnNonAlphanumericCharsInPath(t *testing.T) {
 
 	require.Len(t, validator.Errors(), 1)
 
-	assert.Error(t, validator.Errors()[0], "server path must only be alpha numeric characters")
+	assert.EqualError(t, validator.Errors()[0], "server: option 'address' must have a path with only alphanumeric characters but it's configured as '/app-le'")
 }
 
 func TestShouldRaiseOnForwardSlashInPath(t *testing.T) {
 	validator := schema.NewStructValidator()
 	config := &schema.Configuration{
-		Server: schema.ServerConfiguration{
-			Path: "app/le",
+		Server: schema.Server{
+			Address: &schema.AddressTCP{
+				Address: MustParseAddress("tcp://:9091/app/le"),
+			},
 		},
 	}
 
 	ValidateServer(config, validator)
 
-	assert.Len(t, validator.Errors(), 1)
+	require.Len(t, validator.Errors(), 1)
 
 	assert.Error(t, validator.Errors()[0], "server path must not contain any forward slashes")
 }
 
-func TestShouldValidateAndUpdateHost(t *testing.T) {
+func TestShouldValidateAndUpdateAddress(t *testing.T) {
 	validator := schema.NewStructValidator()
 	config := newDefaultConfig()
-	config.Server.Host = ""
+	config.Server.Address = nil
 
 	ValidateServer(&config, validator)
 
 	require.Len(t, validator.Errors(), 0)
-	assert.Equal(t, "0.0.0.0", config.Server.Host)
+	assert.Equal(t, "tcp://:9091/", config.Server.Address.String())
+}
+
+func TestShouldDisableHealthcheckForUnixSocketAndFileDescriptor(t *testing.T) {
+	testCases := []struct {
+		name     string
+		address  *schema.AddressTCP
+		expected bool
+	}{
+		{
+			name:     "ShouldDisableHealthcheckForUnixSocket",
+			address:  &schema.AddressTCP{Address: schema.NewAddressUnix("/path/to/authelia.sock")},
+			expected: true,
+		},
+		{
+			name:     "ShouldDisableHealthcheckForFileDescriptor",
+			address:  &schema.AddressTCP{Address: MustParseAddress("fd://3")},
+			expected: true,
+		},
+		{
+			name:     "ShouldNotDisableHealthcheckForTCP",
+			address:  &schema.AddressTCP{Address: schema.NewAddressFromNetworkValues("tcp", "127.0.0.1", 9091)},
+			expected: false,
+		},
+		{
+			name:     "ShouldNotDisableHealthcheckForTCP4",
+			address:  &schema.AddressTCP{Address: schema.NewAddressFromNetworkValues("tcp4", "127.0.0.1", 9091)},
+			expected: false,
+		},
+		{
+			name:     "ShouldNotDisableHealthcheckForTCP6",
+			address:  &schema.AddressTCP{Address: schema.NewAddressFromNetworkValues("tcp6", "::1", 9091)},
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			validator := schema.NewStructValidator()
+			config := &schema.Configuration{
+				Server: schema.Server{
+					Address:            tc.address,
+					DisableHealthcheck: false,
+				},
+			}
+
+			ValidateServerAddress(config, validator)
+
+			assert.Len(t, validator.Errors(), 0)
+			assert.Equal(t, tc.expected, config.Server.DisableHealthcheck)
+		})
+	}
 }
 
 func TestShouldRaiseErrorWhenTLSCertWithoutKeyIsProvided(t *testing.T) {
@@ -162,7 +565,7 @@ func TestShouldRaiseErrorWhenTLSCertDoesNotExist(t *testing.T) {
 
 	ValidateServer(&config, validator)
 	require.Len(t, validator.Errors(), 1)
-	assert.EqualError(t, validator.Errors()[0], "server: tls: file path /tmp/unexisting_file provided in 'certificate' does not exist")
+	assert.EqualError(t, validator.Errors()[0], "server: tls: option 'certificate' with path '/tmp/unexisting_file' refers to a file that doesn't exist")
 }
 
 func TestShouldRaiseErrorWhenTLSKeyWithoutCertIsProvided(t *testing.T) {
@@ -195,7 +598,7 @@ func TestShouldRaiseErrorWhenTLSKeyDoesNotExist(t *testing.T) {
 
 	ValidateServer(&config, validator)
 	require.Len(t, validator.Errors(), 1)
-	assert.EqualError(t, validator.Errors()[0], "server: tls: file path /tmp/unexisting_file provided in 'key' does not exist")
+	assert.EqualError(t, validator.Errors()[0], "server: tls: option 'key' with path '/tmp/unexisting_file' refers to a file that doesn't exist")
 }
 
 func TestShouldNotRaiseErrorWhenBothTLSCertificateAndKeyAreProvided(t *testing.T) {
@@ -239,7 +642,7 @@ func TestShouldRaiseErrorWhenTLSClientCertificateDoesNotExist(t *testing.T) {
 
 	ValidateServer(&config, validator)
 	require.Len(t, validator.Errors(), 1)
-	assert.EqualError(t, validator.Errors()[0], "server: tls: client_certificates: certificates: file path /tmp/unexisting does not exist")
+	assert.EqualError(t, validator.Errors()[0], "server: tls: option 'client_certificates' with path '/tmp/unexisting' refers to a file that doesn't exist")
 }
 
 func TestShouldRaiseErrorWhenTLSClientAuthIsDefinedButNotServerCertificate(t *testing.T) {
@@ -265,24 +668,12 @@ func TestShouldNotUpdateConfig(t *testing.T) {
 	ValidateServer(&config, validator)
 
 	require.Len(t, validator.Errors(), 0)
-	assert.Equal(t, 9090, config.Server.Port)
-	assert.Equal(t, loopback, config.Server.Host)
-}
-
-func TestShouldValidateAndUpdatePort(t *testing.T) {
-	validator := schema.NewStructValidator()
-	config := newDefaultConfig()
-	config.Server.Port = 0
-
-	ValidateServer(&config, validator)
-
-	require.Len(t, validator.Errors(), 0)
-	assert.Equal(t, 9091, config.Server.Port)
+	assert.Equal(t, "tcp://127.0.0.1:9090/", config.Server.Address.String())
 }
 
 func TestServerEndpointsDevelShouldWarn(t *testing.T) {
 	config := &schema.Configuration{
-		Server: schema.ServerConfiguration{
+		Server: schema.Server{
 			Endpoints: schema.ServerEndpoints{
 				EnablePprof:   true,
 				EnableExpvars: true,
@@ -304,49 +695,103 @@ func TestServerEndpointsDevelShouldWarn(t *testing.T) {
 func TestServerAuthzEndpointErrors(t *testing.T) {
 	testCases := []struct {
 		name string
-		have map[string]schema.ServerAuthzEndpoint
+		have map[string]schema.ServerEndpointsAuthz
 		errs []string
 	}{
 		{"ShouldAllowDefaultEndpoints", schema.DefaultServerConfiguration.Endpoints.Authz, nil},
 		{"ShouldAllowSetDefaultEndpoints", nil, nil},
 		{
 			"ShouldErrorOnInvalidEndpointImplementations",
-			map[string]schema.ServerAuthzEndpoint{
+			map[string]schema.ServerEndpointsAuthz{
 				"example": {Implementation: "zero"},
 			},
-			[]string{"server: endpoints: authz: example: option 'implementation' must be one of 'AuthRequest', 'ForwardAuth', 'ExtAuthz', 'Legacy' but is configured as 'zero'"},
+			[]string{
+				"server: endpoints: authz: example: option 'implementation' must be one of 'AuthRequest', 'ForwardAuth', 'ExtAuthz', or 'Legacy' but it's configured as 'zero'",
+			},
 		},
 		{
 			"ShouldErrorOnInvalidEndpointImplementationLegacy",
-			map[string]schema.ServerAuthzEndpoint{
+			map[string]schema.ServerEndpointsAuthz{
 				"legacy": {Implementation: "zero"},
 			},
-			[]string{"server: endpoints: authz: legacy: option 'implementation' must be one of 'AuthRequest', 'ForwardAuth', 'ExtAuthz', 'Legacy' but is configured as 'zero'"},
+			[]string{
+				"server: endpoints: authz: legacy: option 'implementation' must be one of 'AuthRequest', 'ForwardAuth', 'ExtAuthz', or 'Legacy' but it's configured as 'zero'",
+			},
 		},
 		{
 			"ShouldErrorOnInvalidEndpointLegacyImplementation",
-			map[string]schema.ServerAuthzEndpoint{
+			map[string]schema.ServerEndpointsAuthz{
 				"legacy": {Implementation: "ExtAuthz"},
 			},
 			[]string{"server: endpoints: authz: legacy: option 'implementation' is invalid: the endpoint with the name 'legacy' must use the 'Legacy' implementation"},
 		},
 		{
 			"ShouldErrorOnInvalidAuthnStrategies",
-			map[string]schema.ServerAuthzEndpoint{
-				"example": {Implementation: "ExtAuthz", AuthnStrategies: []schema.ServerAuthzEndpointAuthnStrategy{{Name: "bad-name"}}},
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {Implementation: "ExtAuthz", AuthnStrategies: []schema.ServerEndpointsAuthzAuthnStrategy{{Name: "bad-name"}}},
 			},
-			[]string{"server: endpoints: authz: example: authn_strategies: option 'name' must be one of 'CookieSession', 'HeaderAuthorization', 'HeaderProxyAuthorization', 'HeaderAuthRequestProxyAuthorization', 'HeaderLegacy' but is configured as 'bad-name'"},
+			[]string{
+				"server: endpoints: authz: example: authn_strategies: option 'name' must be one of 'CookieSession', 'HeaderAuthorization', 'HeaderProxyAuthorization', 'HeaderAuthRequestProxyAuthorization', or 'HeaderLegacy' but it's configured as 'bad-name'",
+			},
 		},
 		{
 			"ShouldErrorOnDuplicateName",
-			map[string]schema.ServerAuthzEndpoint{
-				"example": {Implementation: "ExtAuthz", AuthnStrategies: []schema.ServerAuthzEndpointAuthnStrategy{{Name: "CookieSession"}, {Name: "CookieSession"}}},
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {Implementation: "ExtAuthz", AuthnStrategies: []schema.ServerEndpointsAuthzAuthnStrategy{{Name: "CookieSession"}, {Name: "CookieSession"}}},
 			},
 			[]string{"server: endpoints: authz: example: authn_strategies: duplicate strategy name detected with name 'CookieSession'"},
 		},
 		{
+			"ShouldErrorOnSchemesForInvalidStrategy",
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {Implementation: "ForwardAuth", AuthnStrategies: []schema.ServerEndpointsAuthzAuthnStrategy{{Name: "CookieSession", Schemes: []string{"basic"}}}},
+			},
+			[]string{"server: endpoints: authz: example: authn_strategies: strategy #1 (CookieSession): option 'schemes' is not valid for the strategy"},
+		},
+		{
+			"ShouldNotErrorOnSchemeCase",
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {Implementation: "ForwardAuth", AuthnStrategies: []schema.ServerEndpointsAuthzAuthnStrategy{{Name: "HeaderAuthorization", Schemes: []string{"basIc"}}}},
+			},
+			nil,
+		},
+		{
+			"ShouldErrorOnInvalidStrategySchemesAndUnnamedStrategy",
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {Implementation: "ForwardAuth", AuthnStrategies: []schema.ServerEndpointsAuthzAuthnStrategy{{Name: "HeaderAuthorization", Schemes: []string{"basic", "bearer", "abc"}}}},
+			},
+			[]string{
+				"server: endpoints: authz: example: authn_strategies: strategy #1 (HeaderAuthorization): option 'schemes' must only include the values 'basic' or 'bearer' but has 'abc'",
+			},
+		},
+		{
+			"ShouldErrorOnUnnamedStrategy",
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {Implementation: "ForwardAuth", AuthnStrategies: []schema.ServerEndpointsAuthzAuthnStrategy{{Name: "", Schemes: []string{"basic", "bearer", "abc"}}}},
+			},
+			[]string{
+				"server: endpoints: authz: example: authn_strategies: strategy #1: option 'name' must be configured",
+			},
+		},
+		{
+			"ShouldErrorOnInvalidSchemeOption",
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {Implementation: "ForwardAuth", AuthnStrategies: []schema.ServerEndpointsAuthzAuthnStrategy{{Name: "HeaderAuthorization", SchemeBasicCacheLifespan: time.Minute, Schemes: []string{"bearer"}}}},
+			},
+			[]string{
+				"server: endpoints: authz: example: authn_strategies: strategy #1: option 'scheme_basic_cache_lifespan' can't be configured unless the 'basic' scheme is configured but only the 'bearer' schemes are configured",
+			},
+		},
+		{
+			"ShouldNotErrorOnValidSchemeCase",
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {Implementation: "ForwardAuth", AuthnStrategies: []schema.ServerEndpointsAuthzAuthnStrategy{{Name: "HeaderAuthorization", SchemeBasicCacheLifespan: time.Minute, Schemes: []string{"BASIC"}}}},
+			},
+			[]string{},
+		},
+		{
 			"ShouldErrorOnInvalidChars",
-			map[string]schema.ServerAuthzEndpoint{
+			map[string]schema.ServerEndpointsAuthz{
 				"/abc":  {Implementation: "ForwardAuth"},
 				"/abc/": {Implementation: "ForwardAuth"},
 				"abc/":  {Implementation: "ForwardAuth"},
@@ -371,7 +816,7 @@ func TestServerAuthzEndpointErrors(t *testing.T) {
 		},
 		{
 			"ShouldErrorOnEndpointsWithDuplicatePrefix",
-			map[string]schema.ServerAuthzEndpoint{
+			map[string]schema.ServerEndpointsAuthz{
 				"apple":         {Implementation: "ForwardAuth"},
 				"apple/abc":     {Implementation: "ForwardAuth"},
 				"pear/abc":      {Implementation: "ExtAuthz"},
@@ -423,8 +868,82 @@ func TestServerAuthzEndpointErrors(t *testing.T) {
 	}
 }
 
+func TestServerAuthzEndpointDefaults(t *testing.T) {
+	testCases := []struct {
+		name     string
+		have     map[string]schema.ServerEndpointsAuthz
+		expected map[string]schema.ServerEndpointsAuthz
+	}{
+		{
+			"ShouldSetDefaultSchemes",
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {
+					Implementation: "ForwardAuth",
+					AuthnStrategies: []schema.ServerEndpointsAuthzAuthnStrategy{
+						{
+							Name:    "HeaderAuthorization",
+							Schemes: []string{},
+						},
+					}},
+			},
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {
+					Implementation: "ForwardAuth",
+					Headers:        schema.DefaultServerConfiguration.Endpoints.Authz[schema.AuthzEndpointNameForwardAuth].Headers,
+					AuthnStrategies: []schema.ServerEndpointsAuthzAuthnStrategy{
+						{
+							Name:    "HeaderAuthorization",
+							Schemes: []string{"basic"},
+						},
+					}},
+			},
+		},
+		{
+			"ShouldSetDefaultStrategies",
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {
+					Implementation: "ForwardAuth",
+				},
+			},
+			map[string]schema.ServerEndpointsAuthz{
+				"example": {
+					Implementation: "ForwardAuth",
+					Headers:        schema.DefaultServerConfiguration.Endpoints.Authz[schema.AuthzEndpointNameForwardAuth].Headers,
+					AuthnStrategies: []schema.ServerEndpointsAuthzAuthnStrategy{
+						{
+							Name:    "HeaderAuthorization",
+							Schemes: []string{"basic"},
+						},
+						{
+							Name: "CookieSession",
+						},
+					}},
+			},
+		},
+	}
+
+	validator := schema.NewStructValidator()
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			validator.Clear()
+
+			config := newDefaultConfig()
+
+			config.Server.Endpoints.Authz = tc.have
+
+			ValidateServerEndpoints(&config, validator)
+
+			assert.Len(t, validator.Warnings(), 0)
+			assert.Len(t, validator.Errors(), 0)
+
+			assert.Equal(t, tc.expected, config.Server.Endpoints.Authz)
+		})
+	}
+}
+
 func TestServerAuthzEndpointLegacyAsImplementationLegacyWhenBlank(t *testing.T) {
-	have := map[string]schema.ServerAuthzEndpoint{
+	have := map[string]schema.ServerEndpointsAuthz{
 		"legacy": {},
 	}
 
@@ -439,5 +958,509 @@ func TestServerAuthzEndpointLegacyAsImplementationLegacyWhenBlank(t *testing.T) 
 	assert.Len(t, validator.Warnings(), 0)
 	assert.Len(t, validator.Errors(), 0)
 
-	assert.Equal(t, authzImplementationLegacy, config.Server.Endpoints.Authz[legacy].Implementation)
+	assert.Equal(t, schema.AuthzImplementationLegacy, config.Server.Endpoints.Authz[legacy].Implementation)
+}
+
+func TestValidateTLSPathStatInvalidArgument(t *testing.T) {
+	validator := schema.NewStructValidator()
+
+	validateServerTLSFileExists("key", string([]byte{0x0, 0x1}), validator)
+
+	require.Len(t, validator.Errors(), 1)
+
+	assert.EqualError(t, validator.Errors()[0], "server: tls: option 'key' with path '\x00\x01' could not be verified due to a file system error: stat \x00\x01: invalid argument")
+}
+
+func TestValidateTLSPathIsDir(t *testing.T) {
+	dir := t.TempDir()
+
+	validator := schema.NewStructValidator()
+
+	validateServerTLSFileExists("key", dir, validator)
+
+	require.Len(t, validator.Errors(), 1)
+
+	assert.EqualError(t, validator.Errors()[0], fmt.Sprintf("server: tls: option 'key' with path '%s' refers to a directory but it should refer to a file", dir))
+}
+
+func TestValidateServerAssets(t *testing.T) {
+	testCases := []struct {
+		name   string
+		have   string
+		setup  func(t *testing.T, have string) string
+		errors []any
+	}{
+		{
+			name: "ShouldValidateEmbedded",
+			have: "../../server",
+		},
+		{
+			name: "ShouldValidateEmptyPath",
+			have: "",
+		},
+		{
+			name: "ShouldValidateNoPath",
+			have: "../../nopath",
+			errors: []any{
+				"server: asset_path: error occurred reading the '../../nopath' directory: the directory does not exist",
+			},
+		},
+		{
+			name: "ShouldValidateValueExcludePlaceholder",
+			have: "../test_resources/i18n/example1",
+			errors: []any{
+				"server: asset_path: error occurred decoding the '../test_resources/i18n/example1/locales/en/portal.json' file: translation key 'Powered by {{authelia}}' has a value which is missing a required placeholder",
+			},
+		},
+		{
+			name: "ShouldValidateValueExcludePlaceholder",
+			have: "../test_resources/i18n/example2",
+			errors: []any{
+				"server: asset_path: error occurred decoding the '../test_resources/i18n/example2/locales/en/portal.json' file: translation key 'Powered by {{authelia}}' has a value which is not the required type",
+			},
+		},
+		{
+			name: "ShouldErrorReadDirectory",
+			setup: func(t *testing.T, have string) (out string) {
+				out = t.TempDir()
+
+				require.NoError(t, os.Mkdir(filepath.Join(out, "locales"), 0000))
+
+				return out
+			},
+			errors: []any{
+				regexp.MustCompile(`server: asset_path: error occurred reading the '[\w#/.\\-]+/locales' directory: open [\w#/.\\-]+locales: permission denied`),
+			},
+		},
+		{
+			name: "ShouldErrorReadLocaleDirectory",
+			setup: func(t *testing.T, have string) (out string) {
+				out = t.TempDir()
+
+				require.NoError(t, os.Mkdir(filepath.Join(out, "locales"), 0777))
+				require.NoError(t, os.Mkdir(filepath.Join(out, "locales", "en"), 0000))
+
+				return out
+			},
+			errors: []any{
+				regexp.MustCompile(`server: asset_path: error occurred reading the '[\w#/.\\-]+/locales/en' directory: open [\w#/.\\-]+locales/en: permission denied`),
+			},
+		},
+		{
+			name: "ShouldErrorReadNamespaceFile",
+			setup: func(t *testing.T, have string) (out string) {
+				out = t.TempDir()
+
+				require.NoError(t, os.Mkdir(filepath.Join(out, "locales"), 0777))
+				require.NoError(t, os.Mkdir(filepath.Join(out, "locales", "en"), 0777))
+
+				f, err := os.Create(filepath.Join(out, "locales", "en", "portal.json"))
+				require.NoError(t, err)
+
+				require.NoError(t, f.Chmod(0000))
+
+				require.NoError(t, f.Close())
+
+				return out
+			},
+			errors: []any{
+				regexp.MustCompile(`server: asset_path: error occurred reading the '[\w#/.\\-]+/locales/en/portal.json' file: open [\w#/.\\-]+locales/en/portal.json: permission denied`),
+			},
+		},
+		{
+			name: "ShouldErrorDecodeJSON",
+			setup: func(t *testing.T, have string) (out string) {
+				out = t.TempDir()
+
+				require.NoError(t, os.Mkdir(filepath.Join(out, "locales"), 0777))
+				require.NoError(t, os.Mkdir(filepath.Join(out, "locales", "en"), 0777))
+				require.NoError(t, os.Mkdir(filepath.Join(out, "locales", "en", "notafile"), 0777))
+
+				f, err := os.Create(filepath.Join(out, "locales", "notadir"))
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+
+				f, err = os.Create(filepath.Join(out, "locales", "en", "x.notjson"))
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+
+				f, err = os.Create(filepath.Join(out, "locales", "en", "portal.json"))
+				require.NoError(t, err)
+
+				_, err = f.Write([]byte("not json"))
+				require.NoError(t, err)
+
+				require.NoError(t, f.Close())
+
+				return out
+			},
+			errors: []any{
+				regexp.MustCompile(`server: asset_path: error occurred decoding the '[\w#/.\\-]+/locales/en/portal.json' file: invalid character 'o' in literal null \(expecting 'u'\)`),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			have := tc.have
+
+			if tc.setup != nil {
+				have = tc.setup(t, have)
+			}
+
+			config := &schema.Configuration{Server: schema.Server{AssetPath: have}}
+
+			validator := schema.NewStructValidator()
+
+			validateServerAssets(config, validator)
+
+			warnings := validator.Warnings()
+			errors := validator.Errors()
+
+			assert.Len(t, warnings, 0)
+			require.Len(t, errors, len(tc.errors))
+
+			for i, expected := range tc.errors {
+				switch e := expected.(type) {
+				case *regexp.Regexp:
+					assert.Regexp(t, e, errors[i])
+				case string:
+					assert.EqualError(t, errors[i], e)
+				default:
+					t.Fatal("Expected regex or string for error type")
+				}
+			}
+		})
+	}
+}
+
+func TestValidateServerEndpointsHealth(t *testing.T) {
+	duration := func(d time.Duration) *time.Duration {
+		return &d
+	}
+
+	testCases := []struct {
+		name     string
+		have     schema.ServerEndpointHealth
+		expected schema.ServerEndpointHealth
+		errs     []string
+		warnings []string
+	}{
+		{
+			"ShouldSetDefaults",
+			schema.ServerEndpointHealth{},
+			schema.ServerEndpointHealth{
+				Providers: []string{schema.ProviderNameStorage, schema.ProviderNameCache, schema.ProviderNameUser},
+				Cache:     duration(time.Second * 10),
+			},
+			nil,
+			nil,
+		},
+		{
+			"ShouldKeepConfiguredProviders",
+			schema.ServerEndpointHealth{Verbose: true, Providers: []string{schema.ProviderNameNotification}, Cache: duration(time.Minute)},
+			schema.ServerEndpointHealth{Verbose: true, Providers: []string{schema.ProviderNameNotification}, Cache: duration(time.Minute)},
+			nil,
+			nil,
+		},
+		{
+			"ShouldKeepExplicitZeroCache",
+			schema.ServerEndpointHealth{Providers: []string{schema.ProviderNameStorage}, Cache: duration(0)},
+			schema.ServerEndpointHealth{Providers: []string{schema.ProviderNameStorage}, Cache: duration(0)},
+			nil,
+			nil,
+		},
+		{
+			"ShouldRaiseErrorOnUnknownProvider",
+			schema.ServerEndpointHealth{Providers: []string{"nonexistent"}},
+			schema.ServerEndpointHealth{Providers: []string{"nonexistent"}, Cache: duration(time.Second * 10)},
+			[]string{"server: endpoints: health: option 'providers' must only include the values 'storage', 'cache', 'user', 'notification', 'ntp', 'expressions', 'duo', or 'webauthn-metadata' but it's configured as 'nonexistent'"},
+			nil,
+		},
+		{
+			"ShouldRaiseErrorOnDuplicateProvider",
+			schema.ServerEndpointHealth{Providers: []string{schema.ProviderNameStorage, schema.ProviderNameStorage}},
+			schema.ServerEndpointHealth{Providers: []string{schema.ProviderNameStorage, schema.ProviderNameStorage}, Cache: duration(time.Second * 10)},
+			[]string{"server: endpoints: health: option 'providers' has a duplicate value 'storage'"},
+			nil,
+		},
+		{
+			"ShouldRaiseErrorOnNegativeCache",
+			schema.ServerEndpointHealth{Providers: []string{schema.ProviderNameStorage}, Cache: duration(-time.Second)},
+			schema.ServerEndpointHealth{Providers: []string{schema.ProviderNameStorage}, Cache: duration(-time.Second)},
+			[]string{"server: endpoints: health: option 'cache' must be greater than or equal to 0 but it's configured as '-1s'"},
+			nil,
+		},
+		{
+			"ShouldWarnWhenDetailedWithoutVerbose",
+			schema.ServerEndpointHealth{Detailed: true, Providers: []string{schema.ProviderNameStorage}, Cache: duration(time.Second)},
+			schema.ServerEndpointHealth{Detailed: true, Providers: []string{schema.ProviderNameStorage}, Cache: duration(time.Second)},
+			nil,
+			[]string{"server: endpoints: health: option 'detailed' has no effect unless option 'verbose' is enabled"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			validator := schema.NewStructValidator()
+			config := &schema.Configuration{Server: schema.Server{Endpoints: schema.ServerEndpoints{Health: tc.have}}}
+
+			validateServerEndpointsHealth(config, validator)
+
+			assert.Equal(t, tc.expected, config.Server.Endpoints.Health)
+
+			errs := validator.Errors()
+			require.Len(t, errs, len(tc.errs))
+
+			for i, expected := range tc.errs {
+				assert.EqualError(t, errs[i], expected)
+			}
+
+			warnings := validator.Warnings()
+			require.Len(t, warnings, len(tc.warnings))
+
+			for i, expected := range tc.warnings {
+				assert.EqualError(t, warnings[i], expected)
+			}
+		})
+	}
+}
+
+func TestServerAuthzEndpointHeaders(t *testing.T) {
+	testCases := []struct {
+		name    string
+		setup   func(config *schema.Configuration)
+		headers map[string]schema.ServerEndpointsAuthzHeader
+		errs    []string
+	}{
+		{
+			name: "ShouldAllowDefaultAttributes",
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				schema.HeaderRemoteUser:   {UserAttribute: "username"},
+				schema.HeaderRemoteGroups: {UserAttribute: "groups"},
+				schema.HeaderRemoteName:   {UserAttribute: "display_name"},
+				schema.HeaderRemoteEmail:  {UserAttribute: "email"},
+			},
+		},
+		{
+			name: "ShouldAllowDerivedAttributes",
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Remote-Emails-Extra":          {UserAttribute: "emails_extra"},
+				"Remote-Email-Verified":        {UserAttribute: "email_verified"},
+				"Remote-Updated-At":            {UserAttribute: "updated_at"},
+				"Remote-Address":               {UserAttribute: "address"},
+				"Remote-Phone-Number-RFC3966":  {UserAttribute: "phone_number_rfc3966"},
+				"Remote-Phone-Number-Verified": {UserAttribute: "phone_number_verified"},
+			},
+		},
+		{
+			name: "ShouldAllowExtraAttributeFromFileBackend",
+			setup: func(config *schema.Configuration) {
+				config.AuthenticationBackend.File.ExtraAttributes = map[string]schema.AuthenticationBackendExtraAttribute{
+					"employee_id": {ValueType: "integer"},
+				}
+			},
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Remote-Employee-Id": {UserAttribute: "employee_id"},
+			},
+		},
+		{
+			name: "ShouldAllowDefinedUserAttribute",
+			setup: func(config *schema.Configuration) {
+				config.Definitions.UserAttributes = map[string]schema.UserAttribute{
+					"is_admin": {Expression: "'admins' in groups"},
+				}
+			},
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Remote-Is-Admin": {UserAttribute: "is_admin"},
+			},
+		},
+		{
+			name: "ShouldErrorOnUnknownAttributes",
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Remote-Mail":  {UserAttribute: "mail"},
+				"Remote-Teams": {UserAttribute: "teams"},
+			},
+			errs: []string{
+				"server: endpoints: authz: example: headers: Remote-Mail: option 'user_attribute' must be a known user attribute but it's configured as 'mail'",
+				"server: endpoints: authz: example: headers: Remote-Teams: option 'user_attribute' must be a known user attribute but it's configured as 'teams'",
+			},
+		},
+		{
+			name: "ShouldErrorOnInvalidHeaderNames",
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Remote User":  {UserAttribute: "username"},
+				"Remote:Group": {UserAttribute: "groups"},
+			},
+			errs: []string{
+				"server: endpoints: authz: example: headers: Remote User: header name must only contain valid header name characters",
+				"server: endpoints: authz: example: headers: Remote:Group: header name must only contain valid header name characters",
+			},
+		},
+		{
+			name: "ShouldErrorOnReservedHeaderNames",
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Content-Type":     {UserAttribute: "username"},
+				"Location":         {UserAttribute: "username"},
+				"set-cookie":       {UserAttribute: "username"},
+				"WWW-Authenticate": {UserAttribute: "username"},
+				"X-Authelia-URL":   {UserAttribute: "username"},
+			},
+			errs: []string{
+				"server: endpoints: authz: example: headers: Content-Type: header name must not be a standard or reserved header",
+				"server: endpoints: authz: example: headers: Location: header name must not be a standard or reserved header",
+				"server: endpoints: authz: example: headers: WWW-Authenticate: header name must not be a standard or reserved header",
+				"server: endpoints: authz: example: headers: X-Authelia-URL: header name must not be a standard or reserved header",
+				"server: endpoints: authz: example: headers: set-cookie: header name must not be a standard or reserved header",
+			},
+		},
+		{
+			name: "ShouldErrorOnReservedHeaderNamePrefixes",
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Access-Control-Allow-Origin": {UserAttribute: "username"},
+				"Sec-Fetch-Site":              {UserAttribute: "username"},
+				"X-Forwarded-User":            {UserAttribute: "username"},
+				"X-Original-User":             {UserAttribute: "username"},
+			},
+			errs: []string{
+				"server: endpoints: authz: example: headers: Access-Control-Allow-Origin: header name must not be a standard or reserved header",
+				"server: endpoints: authz: example: headers: Sec-Fetch-Site: header name must not be a standard or reserved header",
+				"server: endpoints: authz: example: headers: X-Forwarded-User: header name must not be a standard or reserved header",
+				"server: endpoints: authz: example: headers: X-Original-User: header name must not be a standard or reserved header",
+			},
+		},
+		{
+			name: "ShouldErrorOnDuplicateHeaderNames",
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Remote-User": {UserAttribute: "username"},
+				"remote-user": {UserAttribute: "display_name"},
+			},
+			errs: []string{
+				"server: endpoints: authz: example: headers: remote-user: header name duplicates the 'Remote-User' header as header names are case-insensitive",
+			},
+		},
+		{
+			name: "ShouldAllowUncommonButValidHeaderNames",
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Remote_User":   {UserAttribute: "username"},
+				"X-Team+Name":   {UserAttribute: "display_name"},
+				"Remote-Groups": {UserAttribute: "groups"},
+			},
+		},
+		{
+			name: "ShouldErrorOnMissingUserAttribute",
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Remote-User": {},
+			},
+			errs: []string{
+				"server: endpoints: authz: example: headers: Remote-User: option 'user_attribute' is required",
+			},
+		},
+		{
+			name: "ShouldErrorOnAttributeNotMappedByLDAPBackend",
+			setup: func(config *schema.Configuration) {
+				config.AuthenticationBackend.File = nil
+				config.AuthenticationBackend.LDAP = &schema.AuthenticationBackendLDAP{}
+			},
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Remote-Given-Name": {UserAttribute: "given_name"},
+			},
+			errs: []string{
+				"server: endpoints: authz: example: headers: Remote-Given-Name: option 'user_attribute' must be a known user attribute but it's configured as 'given_name'",
+			},
+		},
+		{
+			name: "ShouldAllowAttributeMappedByLDAPBackend",
+			setup: func(config *schema.Configuration) {
+				config.AuthenticationBackend.File = nil
+				config.AuthenticationBackend.LDAP = &schema.AuthenticationBackendLDAP{}
+				config.AuthenticationBackend.LDAP.Attributes.GivenName = "givenName"
+				config.AuthenticationBackend.LDAP.Attributes.PhoneNumber = "telephoneNumber"
+			},
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Remote-Given-Name":           {UserAttribute: "given_name"},
+				"Remote-Phone-Number-RFC3966": {UserAttribute: "phone_number_rfc3966"},
+				"Remote-Updated-At":           {UserAttribute: "updated_at"},
+			},
+		},
+		{
+			name: "ShouldErrorOnDerivedAddressNotMappedByLDAPBackend",
+			setup: func(config *schema.Configuration) {
+				config.AuthenticationBackend.File = nil
+				config.AuthenticationBackend.LDAP = &schema.AuthenticationBackendLDAP{}
+			},
+			headers: map[string]schema.ServerEndpointsAuthzHeader{
+				"Remote-Address": {UserAttribute: "address"},
+			},
+			errs: []string{
+				"server: endpoints: authz: example: headers: Remote-Address: option 'user_attribute' must be a known user attribute but it's configured as 'address'",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			validator := schema.NewStructValidator()
+
+			config := newDefaultConfig()
+
+			if tc.setup != nil {
+				tc.setup(&config)
+			}
+
+			config.Server.Endpoints.Authz = map[string]schema.ServerEndpointsAuthz{
+				"example": {Implementation: schema.AuthzImplementationForwardAuth, Headers: tc.headers},
+			}
+
+			ValidateServerEndpoints(&config, validator)
+
+			assert.Len(t, validator.Warnings(), 0)
+			require.Len(t, validator.Errors(), len(tc.errs))
+
+			for i, expected := range tc.errs {
+				assert.EqualError(t, validator.Errors()[i], expected)
+			}
+		})
+	}
+}
+
+func TestValidateServerTrustedProxies(t *testing.T) {
+	testCases := []struct {
+		name     string
+		have     schema.ServerHeadersTrustedProxies
+		expected []string
+	}{
+		{"ShouldAllowDisabled", schema.ServerHeadersTrustedProxies{}, nil},
+		{"ShouldAllowEnabled", schema.ServerHeadersTrustedProxies{Enable: true}, nil},
+		{"ShouldAllowWalkWhenEnabled", schema.ServerHeadersTrustedProxies{Enable: true, WalkXForwardedFor: true}, nil},
+		{"ShouldAllowNetworksWhenEnabled", schema.ServerHeadersTrustedProxies{Enable: true, Networks: []*net.IPNet{{IP: net.IPv4(10, 0, 0, 0), Mask: net.CIDRMask(8, 32)}}}, nil},
+		{"ShouldAllowEmptyNetworksWhenDisabled", schema.ServerHeadersTrustedProxies{Networks: []*net.IPNet{}}, nil},
+		{
+			"ShouldErrorNetworksWhenDisabled",
+			schema.ServerHeadersTrustedProxies{Networks: []*net.IPNet{{IP: net.IPv4(10, 0, 0, 0), Mask: net.CIDRMask(8, 32)}}},
+			[]string{"server: headers: trusted_proxies: option 'networks' must not be configured unless option 'enable' is also enabled"},
+		},
+		{
+			"ShouldErrorWalkWhenDisabled",
+			schema.ServerHeadersTrustedProxies{WalkXForwardedFor: true},
+			[]string{"server: headers: trusted_proxies: option 'walk_x_forwarded_for' must not be enabled unless option 'enable' is also enabled"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			validator := schema.NewStructValidator()
+			config := &schema.Configuration{}
+
+			config.Server.Headers.TrustedProxies = tc.have
+
+			ValidateServer(config, validator)
+
+			require.Len(t, validator.Errors(), len(tc.expected))
+
+			for i, expected := range tc.expected {
+				assert.EqualError(t, validator.Errors()[i], expected)
+			}
+		})
+	}
 }

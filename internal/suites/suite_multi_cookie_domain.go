@@ -1,20 +1,23 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
-	"fmt"
 	"time"
 )
 
 var multiCookieDomainSuiteName = "MultiCookieDomain"
 
 var multiCookieDomainDockerEnvironment = NewDockerEnvironment([]string{
-	"internal/suites/docker-compose.yml",
-	"internal/suites/MultiCookieDomain/docker-compose.yml",
-	"internal/suites/example/compose/authelia/docker-compose.backend.{}.yml",
-	"internal/suites/example/compose/authelia/docker-compose.frontend.{}.yml",
-	"internal/suites/example/compose/nginx/backend/docker-compose.yml",
-	"internal/suites/example/compose/nginx/portal/docker-compose.yml",
-	"internal/suites/example/compose/smtp/docker-compose.yml",
+	"internal/suites/compose.yml",
+	"internal/suites/MultiCookieDomain/compose.yml",
+	"internal/suites/example/compose/authelia/compose.backend.{}.yml",
+	"internal/suites/example/compose/authelia/compose.frontend.{}.yml",
+	"internal/suites/example/compose/nginx/backend/compose.yml",
+	"internal/suites/example/compose/nginx/portal/compose.yml",
+	"internal/suites/example/compose/smtp/compose.yml",
 })
 
 func init() {
@@ -27,25 +30,11 @@ func init() {
 			return err
 		}
 
-		return updateDevEnvFileForDomain(BaseDomain, true)
+		return updateDevEnvFileForDomain(BaseDomain, multiCookieDomainDockerEnvironment)
 	}
 
 	displayAutheliaLogs := func() error {
-		backendLogs, err := multiCookieDomainDockerEnvironment.Logs("authelia-backend", nil)
-		if err != nil {
-			return err
-		}
-
-		fmt.Println(backendLogs)
-
-		frontendLogs, err := multiCookieDomainDockerEnvironment.Logs("authelia-frontend", nil)
-		if err != nil {
-			return err
-		}
-
-		fmt.Println(frontendLogs)
-
-		return nil
+		return multiCookieDomainDockerEnvironment.PrintLogs("authelia-backend", "authelia-frontend")
 	}
 
 	teardown := func(suitePath string) error {
@@ -55,12 +44,12 @@ func init() {
 
 	GlobalRegistry.Register(multiCookieDomainSuiteName, Suite{
 		SetUp:           setup,
-		SetUpTimeout:    5 * time.Minute,
-		OnError:         displayAutheliaLogs,
+		SetUpTimeout:    2 * time.Minute,
 		OnSetupTimeout:  displayAutheliaLogs,
-		TearDown:        teardown,
+		OnError:         displayAutheliaLogs,
 		TestTimeout:     4 * time.Minute,
-		TearDownTimeout: 2 * time.Minute,
+		TearDown:        teardown,
+		TearDownTimeout: 1 * time.Minute,
 		Description: `This suite is used to test Authelia in a multi cookie domain
 configuration with in-memory sessions and a local sqlite db stored on disk`,
 	})

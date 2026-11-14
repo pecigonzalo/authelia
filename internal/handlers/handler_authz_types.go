@@ -1,12 +1,21 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package handlers
 
 import (
+	"context"
+	"errors"
 	"net/url"
-	"time"
+
+	oauthelia2 "authelia.com/provider/oauth2"
 
 	"github.com/authelia/authelia/v4/internal/authentication"
 	"github.com/authelia/authelia/v4/internal/authorization"
-	"github.com/authelia/authelia/v4/internal/middlewares"
+	"github.com/authelia/authelia/v4/internal/configuration/schema"
+	"github.com/authelia/authelia/v4/internal/model"
+	"github.com/authelia/authelia/v4/internal/oidc"
 	"github.com/authelia/authelia/v4/internal/session"
 )
 
@@ -23,27 +32,40 @@ type Authz struct {
 
 	handleAuthorized   HandlerAuthzAuthorized
 	handleUnauthorized HandlerAuthzUnauthorized
+	handleForbidden    HandlerAuthzForbidden
 
 	implementation AuthzImplementation
+
+	headers []AuthzHeader
+}
+
+// AuthzHeader represents a response header which is set from a resolved user attribute.
+type AuthzHeader struct {
+	Key       []byte
+	Attribute string
 }
 
 // HandlerAuthzUnauthorized is a Authz handler func that handles unauthorized responses.
-type HandlerAuthzUnauthorized func(ctx *middlewares.AutheliaCtx, authn *Authn, redirectionURL *url.URL)
+type HandlerAuthzUnauthorized func(ctx AuthzContext, authn *Authn, redirectionURL *url.URL)
+
+// HandlerAuthzForbidden is a Authz handler func that handles forbidden responses. The redirectionURL is the portal
+// access denied page, or nil when the Authelia URL could not be determined.
+type HandlerAuthzForbidden func(ctx AuthzContext, authn *Authn, redirectionURL *url.URL)
 
 // HandlerAuthzAuthorized is a Authz handler func that handles authorized responses.
-type HandlerAuthzAuthorized func(ctx *middlewares.AutheliaCtx, authn *Authn)
+type HandlerAuthzAuthorized func(ctx AuthzContext, headers []AuthzHeader, authn *Authn)
 
 // HandlerAuthzGetAutheliaURL is a Authz handler func that handles retrieval of the Portal URL.
-type HandlerAuthzGetAutheliaURL func(ctx *middlewares.AutheliaCtx) (portalURL *url.URL, err error)
+type HandlerAuthzGetAutheliaURL func(ctx AuthzContext) (portalURL *url.URL, err error)
 
 // HandlerAuthzGetRedirectionURL is a Authz handler func that handles retrieval of the Redirection URL.
-type HandlerAuthzGetRedirectionURL func(ctx *middlewares.AutheliaCtx, object *authorization.Object) (redirectionURL *url.URL, err error)
+type HandlerAuthzGetRedirectionURL func(ctx AuthzContext, object *authorization.Object) (redirectionURL *url.URL, err error)
 
 // HandlerAuthzGetObject is a Authz handler func that handles retrieval of the authorization.Object to authorize.
-type HandlerAuthzGetObject func(ctx *middlewares.AutheliaCtx) (object authorization.Object, err error)
+type HandlerAuthzGetObject func(ctx AuthzContext) (object authorization.Object, err error)
 
 // HandlerAuthzVerifyObject is a Authz handler func that handles authorization of the authorization.Object.
-type HandlerAuthzVerifyObject func(ctx *middlewares.AutheliaCtx, object authorization.Object) (err error)
+type HandlerAuthzVerifyObject func(ctx AuthzContext, object authorization.Object) (err error)
 
 // AuthnType is an auth type.
 type AuthnType int
@@ -66,16 +88,27 @@ const (
 type Authn struct {
 	Username string
 	Method   string
+	ClientID string
 
-	Details authentication.UserDetails
+	Details authentication.UserDetailsExtended
 	Level   authentication.Level
 	Object  authorization.Object
 	Type    AuthnType
+
+	Header HeaderAuthorization
+}
+
+// HeaderAuthorization represents the parsed Authorization header of an authorization request.
+type HeaderAuthorization struct {
+	Authorization *model.Authorization
+	Realm         string
+	Scope         string
+	Error         *oauthelia2.RFC6749Error
 }
 
 // AuthzConfig represents the configuration elements of the Authz type.
 type AuthzConfig struct {
-	RefreshInterval time.Duration
+	RefreshInterval schema.RefreshIntervalDuration
 
 	// StatusCodeBadRequest is sent for configuration issues prior to performing authorization checks. It's set by the
 	// builder.
@@ -87,20 +120,24 @@ type AuthzBuilder struct {
 	config         AuthzConfig
 	implementation AuthzImplementation
 	strategies     []AuthnStrategy
+	headers        map[string]schema.ServerEndpointsAuthzHeader
+
+	disableAccessDeniedRedirect bool
 }
 
 // AuthnStrategy is a strategy used for Authz authentication.
 type AuthnStrategy interface {
-	Get(ctx *middlewares.AutheliaCtx, provider *session.Session) (authn Authn, err error)
+	Get(ctx AuthzContext, manager session.Manager, object *authorization.Object) (authn *Authn, err error)
 	CanHandleUnauthorized() (handle bool)
-	HandleUnauthorized(ctx *middlewares.AutheliaCtx, authn *Authn, redirectionURL *url.URL)
+	HeaderStrategy() (is bool)
+	HandleUnauthorized(ctx AuthzContext, authn *Authn, redirectionURL *url.URL)
 }
 
 // AuthzResult is a result for Authz response handling determination.
 type AuthzResult int
 
 const (
-	// AuthzResultForbidden means the user is forbidden the access to a resource.
+	// AuthzResultForbidden means the user is forbidden access to a resource.
 	AuthzResultForbidden AuthzResult = iota
 
 	// AuthzResultUnauthorized means the user can access the resource with more permissions.
@@ -129,7 +166,7 @@ const (
 	// AuthzImplForwardAuth is the modern Forward Auth Authz implementation which is used by Caddy and Traefik.
 	AuthzImplForwardAuth
 
-	// AuthzImplAuthRequest is the modern Auth Request Authz implementation which is used by NGINX and modelled after
+	// AuthzImplAuthRequest is the modern Auth Request Authz implementation which is used by NGINX and modeled after
 	// the ingress-nginx k8s ingress.
 	AuthzImplAuthRequest
 
@@ -152,3 +189,15 @@ func (i AuthzImplementation) String() string {
 		return ""
 	}
 }
+
+// AuthzBearerIntrospectionProvider is the provider used to introspect bearer tokens during authorization.
+type AuthzBearerIntrospectionProvider interface {
+	GetRegisteredClient(ctx context.Context, id string) (client oidc.Client, err error)
+	GetAudienceStrategy(ctx context.Context) (strategy oauthelia2.AudienceStrategy)
+	GetResourceStrategy(ctx context.Context) (strategy oauthelia2.ResourceStrategy)
+	IntrospectToken(ctx context.Context, token string, tokenUse oauthelia2.TokenUse, session oauthelia2.Session, scope ...string) (oauthelia2.TokenUse, oauthelia2.AccessRequester, error)
+}
+
+var (
+	errTokenIntent = errors.New("the bearer token doesn't appear to be an authelia bearer token")
+)

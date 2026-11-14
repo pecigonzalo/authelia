@@ -1,12 +1,23 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package middlewares
 
 import (
+	"context"
+	"net"
+
 	"github.com/sirupsen/logrus"
 	"github.com/valyala/fasthttp"
 
 	"github.com/authelia/authelia/v4/internal/authentication"
 	"github.com/authelia/authelia/v4/internal/authorization"
+	"github.com/authelia/authelia/v4/internal/cache"
+	"github.com/authelia/authelia/v4/internal/clock"
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
+	"github.com/authelia/authelia/v4/internal/duo"
+	"github.com/authelia/authelia/v4/internal/expression"
 	"github.com/authelia/authelia/v4/internal/metrics"
 	"github.com/authelia/authelia/v4/internal/notification"
 	"github.com/authelia/authelia/v4/internal/ntp"
@@ -17,7 +28,7 @@ import (
 	"github.com/authelia/authelia/v4/internal/storage"
 	"github.com/authelia/authelia/v4/internal/templates"
 	"github.com/authelia/authelia/v4/internal/totp"
-	"github.com/authelia/authelia/v4/internal/utils"
+	"github.com/authelia/authelia/v4/internal/webauthn"
 )
 
 // AutheliaCtx contains all server variables related to Authelia.
@@ -28,26 +39,58 @@ type AutheliaCtx struct {
 	Providers     Providers
 	Configuration schema.Configuration
 
-	Clock utils.Clock
+	session session.Strategy
 
-	session *session.Session
+	sessions map[string]*session.UserSession
 }
 
 // Providers contain all provider provided to Authelia.
 type Providers struct {
-	Authorizer      *authorization.Authorizer
-	SessionProvider *session.Provider
-	Regulator       *regulation.Regulator
-	OpenIDConnect   *oidc.OpenIDConnectProvider
-	Metrics         metrics.Provider
-	NTP             *ntp.Provider
-	UserProvider    authentication.UserProvider
-	StorageProvider storage.Provider
-	Notifier        notification.Notifier
-	Templates       *templates.Provider
-	TOTP            totp.Provider
-	PasswordPolicy  PasswordPolicyProvider
-	Random          random.Provider
+	Authorizer            *authorization.Authorizer
+	Cache                 cache.Provider
+	Session               session.Provider
+	SessionRepository     session.Repository
+	Regulator             *regulation.Regulator
+	OpenIDConnect         *oidc.OpenIDConnectProvider
+	Metrics               metrics.Provider
+	NTP                   *ntp.Provider
+	UserProvider          authentication.UserProvider
+	StorageProvider       storage.Provider
+	Notifier              notification.Notifier
+	Templates             *templates.Provider
+	TOTP                  totp.Provider
+	PasswordPolicy        PasswordPolicyProvider
+	UserAttributeResolver expression.UserAttributeResolver
+	MetaDataService       webauthn.MetaDataProvider
+	Duo                   duo.Provider
+
+	GarbageCollector *GarbageCollector
+
+	Random random.Provider
+	Clock  clock.Provider
+}
+
+// Context represents the context used by the middlewares.
+type Context interface {
+	GetClock() (clock clock.Provider)
+	GetRandom() (random random.Provider)
+	GetLogger() (logger *logrus.Entry)
+	GetProviders() (providers Providers)
+	GetConfiguration() (config *schema.Configuration)
+	RemoteIP() (ip net.IP)
+
+	context.Context
+}
+
+// ServiceContext represents the context used by the services.
+type ServiceContext interface {
+	GetClock() (clock clock.Provider)
+	GetRandom() (random random.Provider)
+	GetLogger() (logger *logrus.Entry)
+	GetProviders() (providers Providers)
+	GetConfiguration() (config *schema.Configuration)
+
+	context.Context
 }
 
 // RequestHandler represents an Authelia request handler.
@@ -78,12 +121,15 @@ type Basic func(next fasthttp.RequestHandler) (handler fasthttp.RequestHandler)
 // of the identity verification process.
 type IdentityVerificationStartArgs struct {
 	// Email template needs a subject, a title and the content of the button.
-	MailTitle         string
-	MailButtonContent string
+	MailTitle               string
+	MailButtonContent       string
+	MailButtonRevokeContent string
 
 	// The target endpoint where to redirect the user when verification process
 	// is completed successfully.
 	TargetEndpoint string
+
+	RevokeEndpoint string
 
 	// The action claim that will be stored in the JWT token.
 	ActionClaim string
@@ -119,5 +165,22 @@ type OKResponse struct {
 // ErrorResponse model of an error response.
 type ErrorResponse struct {
 	Status  string `json:"status"`
+	Code    string `json:"code,omitempty"`
 	Message string `json:"message"`
+}
+
+// AuthenticationErrorResponse model of an error response.
+type AuthenticationErrorResponse struct {
+	Status         string `json:"status"`
+	Code           string `json:"code,omitempty"`
+	Message        string `json:"message"`
+	Authentication bool   `json:"authentication"`
+	Elevation      bool   `json:"elevation"`
+}
+
+// ElevatedForbiddenResponse is a response for RequireElevated.
+type ElevatedForbiddenResponse struct {
+	Elevation    bool `json:"elevation"`
+	FirstFactor  bool `json:"first_factor"`
+	SecondFactor bool `json:"second_factor"`
 }

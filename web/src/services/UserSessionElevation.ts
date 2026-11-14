@@ -1,0 +1,73 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
+import axios from "axios";
+
+import {
+    ErrorResponse,
+    OKResponse,
+    ServiceResponse,
+    UserSessionElevationPath,
+    hasServiceError,
+    toData,
+    validateStatusOneTimeCode,
+} from "@services/Api";
+import { PostWithOptionalResponse } from "@services/Client";
+import { ServiceError } from "@services/ServiceError";
+
+export interface UserSessionElevation {
+    require_second_factor: boolean;
+    skip_second_factor: boolean;
+    can_skip_second_factor: boolean;
+    factor_knowledge: boolean;
+    elevated: boolean;
+    expires: number;
+}
+
+export interface UserSessionElevationGenerateData {
+    delete_id: string;
+}
+
+export async function getUserSessionElevation() {
+    const res = await axios<ServiceResponse<UserSessionElevation>>({
+        method: "GET",
+        url: UserSessionElevationPath,
+    });
+
+    if (res.status !== 200 || hasServiceError(res).errored) {
+        const { code, message } = hasServiceError(res);
+
+        throw new ServiceError(
+            `Failed POST to ${UserSessionElevationPath}. Code: ${res.status}. Message: ${message}`,
+            res.status,
+            code,
+        );
+    }
+
+    return toData<UserSessionElevation>(res);
+}
+
+export async function generateUserSessionElevation() {
+    return PostWithOptionalResponse<UserSessionElevationGenerateData>(UserSessionElevationPath);
+}
+
+export async function verifyUserSessionElevation(otc: string) {
+    const res = await axios<ErrorResponse | OKResponse>({
+        data: { otc: otc },
+        method: "PUT",
+        url: UserSessionElevationPath,
+        validateStatus: validateStatusOneTimeCode,
+    });
+
+    return res.status === 200 && res.data.status === "OK";
+}
+
+export async function deleteUserSessionElevation(deleteID: string) {
+    const res = await axios<ErrorResponse | OKResponse>({
+        method: "DELETE",
+        url: `${UserSessionElevationPath}/${deleteID}`,
+    });
+
+    return res.status === 200 && res.data.status === "OK";
+}

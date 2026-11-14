@@ -1,31 +1,77 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package model
 
 import (
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"image"
 	"net/url"
 	"strconv"
 	"time"
 
-	"github.com/pquerna/otp"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
+
+	"github.com/authelia/otp"
 )
+
+// TOTPOptions represents the TOTP options available when registering a TOTP configuration.
+type TOTPOptions struct {
+	Algorithm  string   `json:"algorithm"`
+	Algorithms []string `json:"algorithms"`
+
+	Length  int   `json:"length"`
+	Lengths []int `json:"lengths"`
+
+	Period  int   `json:"period"`
+	Periods []int `json:"periods"`
+}
 
 // TOTPConfiguration represents a users TOTP configuration row in the database.
 type TOTPConfiguration struct {
-	ID         int          `db:"id" json:"-"`
-	CreatedAt  time.Time    `db:"created_at" json:"-"`
-	LastUsedAt sql.NullTime `db:"last_used_at" json:"-"`
-	Username   string       `db:"username" json:"-"`
-	Issuer     string       `db:"issuer" json:"-"`
-	Algorithm  string       `db:"algorithm" json:"-"`
-	Digits     uint         `db:"digits" json:"digits"`
-	Period     uint         `db:"period" json:"period"`
+	ID         int          `db:"id"`
+	CreatedAt  time.Time    `db:"created_at"`
+	LastUsedAt sql.NullTime `db:"last_used_at"`
+	Username   string       `db:"username"`
+	Issuer     string       `db:"issuer"`
+	Algorithm  string       `db:"algorithm"`
+	Digits     uint32       `db:"digits"`
+	Period     uint         `db:"period"`
 	Secret     []byte       `db:"secret" json:"-"`
 }
 
-// LastUsed provides LastUsedAt as a *time.Time instead of sql.NullTime.
+// TOTPConfigurationJSON is the JSON representation for a TOTPConfiguration.
+type TOTPConfigurationJSON struct {
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Issuer     string     `json:"issuer"`
+	Algorithm  string     `json:"algorithm"`
+	Digits     uint32     `json:"digits"`
+	Period     uint       `json:"period"`
+}
+
+// MarshalJSON returns the TOTPConfiguration in a JSON friendly manner.
+func (c TOTPConfiguration) MarshalJSON() (data []byte, err error) {
+	o := TOTPConfigurationJSON{
+		CreatedAt: c.CreatedAt,
+		Issuer:    c.Issuer,
+		Algorithm: c.Algorithm,
+		Digits:    c.Digits,
+		Period:    c.Period,
+	}
+
+	if c.LastUsedAt.Valid {
+		o.LastUsedAt = &c.LastUsedAt.Time
+	}
+
+	return json.Marshal(o)
+}
+
+// LastUsed provides LastUsedAt as a *[time.Time] instead of [sql.NullTime].
 func (c *TOTPConfiguration) LastUsed() *time.Time {
 	if c.LastUsedAt.Valid {
 		value := time.Unix(c.LastUsedAt.Time.Unix(), int64(c.LastUsedAt.Time.Nanosecond()))
@@ -65,7 +111,7 @@ func (c *TOTPConfiguration) Key() (key *otp.Key, err error) {
 	return otp.NewKeyFromURL(c.URI())
 }
 
-// Image returns the image.Image of the TOTPConfiguration using the Image func from the return of TOTPConfiguration.Key.
+// Image returns the [image.Image] of the TOTPConfiguration using the Image func from the return of TOTPConfiguration.Key.
 func (c *TOTPConfiguration) Image(width, height int) (img image.Image, err error) {
 	var key *otp.Key
 
@@ -121,26 +167,26 @@ func (c *TOTPConfiguration) UnmarshalYAML(value *yaml.Node) (err error) {
 	return nil
 }
 
-// TOTPConfigurationData is used for marshalling/unmarshalling tasks.
+// TOTPConfigurationData is used for marshaling/unmarshaling tasks.
 type TOTPConfigurationData struct {
-	CreatedAt  time.Time  `yaml:"created_at"`
-	LastUsedAt *time.Time `yaml:"last_used_at"`
-	Username   string     `yaml:"username"`
-	Issuer     string     `yaml:"issuer"`
-	Algorithm  string     `yaml:"algorithm"`
-	Digits     uint       `yaml:"digits"`
-	Period     uint       `yaml:"period"`
-	Secret     string     `yaml:"secret"`
+	CreatedAt  time.Time  `yaml:"created_at" toml:"created_at" json:"created_at" jsonschema:"title=Created At" jsonschema_description:"The time the configuration was created."`
+	LastUsedAt *time.Time `yaml:"last_used_at" toml:"last_used_at" json:"last_used_at" jsonschema:"title=Last Used At" jsonschema_description:"The time the configuration was last used at."`
+	Username   string     `yaml:"username" toml:"username" json:"username" jsonschema:"title=Username" jsonschema_description:"The username of the user this configuration belongs to."`
+	Issuer     string     `yaml:"issuer" toml:"issuer" json:"issuer" jsonschema:"title=Issuer" jsonschema_description:"The issuer name this was generated with."`
+	Algorithm  string     `yaml:"algorithm" toml:"algorithm" json:"algorithm" jsonschema:"title=Algorithm" jsonschema_description:"The algorithm this configuration uses."`
+	Digits     uint32     `yaml:"digits" toml:"digits" json:"digits" jsonschema:"title=Digits" jsonschema_description:"The number of digits this configuration uses."`
+	Period     uint       `yaml:"period" toml:"period" json:"period" jsonschema:"title=Period" jsonschema_description:"The period of time this configuration uses."`
+	Secret     string     `yaml:"secret" toml:"secret" json:"secret" jsonschema:"title=Secret" jsonschema_description:"The secret shared key for this configuration."`
 }
 
 // TOTPConfigurationDataExport represents a TOTPConfiguration export file.
 type TOTPConfigurationDataExport struct {
-	TOTPConfigurations []TOTPConfigurationData `yaml:"totp_configurations"`
+	TOTPConfigurations []TOTPConfigurationData `yaml:"totp_configurations" toml:"totp_configurations" json:"totp_configurations" jsonschema:"title=TOTP Configurations" jsonschema_description:"The list of TOTP configurations."`
 }
 
 // TOTPConfigurationExport represents a TOTPConfiguration export file.
 type TOTPConfigurationExport struct {
-	TOTPConfigurations []TOTPConfiguration `yaml:"totp_configurations"`
+	TOTPConfigurations []TOTPConfiguration `yaml:"totp_configurations" toml:"totp_configurations"`
 }
 
 // ToData converts this TOTPConfigurationExport into a TOTPConfigurationDataExport.
@@ -159,4 +205,41 @@ func (export TOTPConfigurationExport) ToData() TOTPConfigurationDataExport {
 // MarshalYAML marshals this model into YAML.
 func (export TOTPConfigurationExport) MarshalYAML() (any, error) {
 	return export.ToData(), nil
+}
+
+// ToConfiguration converts this TOTPConfigurationData into a TOTPConfiguration.
+func (c TOTPConfigurationData) ToConfiguration() (config TOTPConfiguration, err error) {
+	config = TOTPConfiguration{
+		CreatedAt: c.CreatedAt,
+		Username:  c.Username,
+		Issuer:    c.Issuer,
+		Algorithm: c.Algorithm,
+		Digits:    c.Digits,
+		Period:    c.Period,
+	}
+
+	if config.Secret, err = base64.StdEncoding.DecodeString(c.Secret); err != nil {
+		return TOTPConfiguration{}, fmt.Errorf("error occurred decoding secret: %w", err)
+	}
+
+	if c.LastUsedAt != nil {
+		config.LastUsedAt = sql.NullTime{Valid: true, Time: *c.LastUsedAt}
+	}
+
+	return config, nil
+}
+
+// ToExport converts this TOTPConfigurationDataExport into a TOTPConfigurationExport.
+func (export TOTPConfigurationDataExport) ToExport() (data TOTPConfigurationExport, err error) {
+	data = TOTPConfigurationExport{
+		TOTPConfigurations: make([]TOTPConfiguration, len(export.TOTPConfigurations)),
+	}
+
+	for i, config := range export.TOTPConfigurations {
+		if data.TOTPConfigurations[i], err = config.ToConfiguration(); err != nil {
+			return TOTPConfigurationExport{}, fmt.Errorf("error occurred parsing totp configuration %d: %w", i, err)
+		}
+	}
+
+	return data, nil
 }

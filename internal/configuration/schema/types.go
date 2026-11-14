@@ -1,6 +1,11 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package schema
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -8,114 +13,35 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
-	"net"
-	"net/url"
-	"strconv"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/go-crypt/crypt"
 	"github.com/go-crypt/crypt/algorithm"
 	"github.com/go-crypt/crypt/algorithm/plaintext"
+	"go.yaml.in/yaml/v4"
+
+	"github.com/authelia/jsonschema"
 )
-
-// NewAddressFromString returns an *Address and error depending on the ability to parse the string as an Address.
-func NewAddressFromString(a string) (addr *Address, err error) {
-	if len(a) == 0 {
-		return &Address{true, "tcp", net.ParseIP("0.0.0.0"), 0}, nil
-	}
-
-	var u *url.URL
-
-	if regexpHasScheme.MatchString(a) {
-		u, err = url.Parse(a)
-	} else {
-		u, err = url.Parse("tcp://" + a)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("could not parse string '%s' as address: expected format is [<scheme>://]<ip>[:<port>]: %w", a, err)
-	}
-
-	return NewAddressFromURL(u)
-}
-
-// NewAddressFromURL returns an *Address and error depending on the ability to parse the *url.URL as an Address.
-func NewAddressFromURL(u *url.URL) (addr *Address, err error) {
-	addr = &Address{
-		Scheme: strings.ToLower(u.Scheme),
-		IP:     net.ParseIP(u.Hostname()),
-	}
-
-	if addr.IP == nil {
-		return nil, fmt.Errorf("could not parse ip for address '%s': %s does not appear to be an IP", u.String(), u.Hostname())
-	}
-
-	port := u.Port()
-	switch port {
-	case "":
-		break
-	default:
-		addr.Port, err = strconv.Atoi(port)
-		if err != nil {
-			return nil, fmt.Errorf("could not parse port for address '%s': %w", u.String(), err)
-		}
-	}
-
-	switch addr.Scheme {
-	case "tcp", "udp":
-		break
-	default:
-		return nil, fmt.Errorf("could not parse scheme for address '%s': scheme '%s' is not valid, expected to be one of 'tcp://', 'udp://'", u.String(), addr.Scheme)
-	}
-
-	addr.valid = true
-
-	return addr, nil
-}
-
-// Address represents an address.
-type Address struct {
-	valid bool
-
-	Scheme string
-	IP     net.IP
-	Port   int
-}
-
-// Valid returns true if the Address is valid.
-func (a Address) Valid() bool {
-	return a.valid
-}
-
-// String returns a string representation of the Address.
-func (a Address) String() string {
-	if !a.valid {
-		return ""
-	}
-
-	return fmt.Sprintf("%s://%s:%d", a.Scheme, a.IP.String(), a.Port)
-}
-
-// HostPort returns a string representation of the Address with just the host and port.
-func (a Address) HostPort() string {
-	if !a.valid {
-		return ""
-	}
-
-	return fmt.Sprintf("%s:%d", a.IP.String(), a.Port)
-}
-
-// Listener creates and returns a net.Listener.
-func (a Address) Listener() (net.Listener, error) {
-	return net.Listen(a.Scheme, a.HostPort())
-}
 
 var cdecoder algorithm.DecoderRegister
 
 // DecodePasswordDigest returns a new PasswordDigest if it can be decoded.
 func DecodePasswordDigest(encodedDigest string) (digest *PasswordDigest, err error) {
+	var d algorithm.Digest
+
+	if d, err = DecodeAlgorithmDigest(encodedDigest); err != nil {
+		return nil, err
+	}
+
+	return NewPasswordDigest(d), nil
+}
+
+// DecodeAlgorithmDigest returns a new algorithm.Digest if it can be decoded.
+func DecodeAlgorithmDigest(encodedDigest string) (digest algorithm.Digest, err error) {
 	if cdecoder == nil {
 		if cdecoder, err = crypt.NewDefaultDecoder(); err != nil {
 			return nil, fmt.Errorf("failed to initialize decoder: %w", err)
@@ -126,13 +52,12 @@ func DecodePasswordDigest(encodedDigest string) (digest *PasswordDigest, err err
 		}
 	}
 
-	var d algorithm.Digest
+	return cdecoder.Decode(encodedDigest)
+}
 
-	if d, err = cdecoder.Decode(encodedDigest); err != nil {
-		return nil, err
-	}
-
-	return &PasswordDigest{Digest: d}, nil
+// NewPasswordDigest returns a new *PasswordDigest from an algorithm.Digest.
+func NewPasswordDigest(digest algorithm.Digest) *PasswordDigest {
+	return &PasswordDigest{Digest: digest}
 }
 
 // PasswordDigest is a configuration type for the crypt.Digest.
@@ -140,8 +65,27 @@ type PasswordDigest struct {
 	algorithm.Digest
 }
 
+// JSONSchema returns the JSON Schema information for the PasswordDigest type.
+func (PasswordDigest) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		Type:    jsonschema.TypeString,
+		Pattern: `^\$((argon2(id|i|d)\$v=19\$m=\d+,t=\d+,p=\d+|scrypt\$ln=\d+,r=\d+,p=\d+)\$[a-zA-Z0-9\/+]+\$[a-zA-Z0-9\/+]+|pbkdf2(-sha(224|256|384|512))?\$\d+\$[a-zA-Z0-9\/.]+\$[a-zA-Z0-9\/.]+|bcrypt-sha256\$v=2,t=2b,r=\d+\$[a-zA-Z0-9\/.]+\$[a-zA-Z0-9\/.]+|2(a|b|y)?\$\d+\$[a-zA-Z0-9.\/]+|(5|6)\$rounds=\d+\$[a-zA-Z0-9.\/]+\$[a-zA-Z0-9.\/]+|plaintext\$.+|base64\$[a-zA-Z0-9.=\/]+)$`,
+	}
+}
+
+// PlainText returns a *plaintext.Digest and boolean. If the PasswordDigest is not a plaintext.Digest then it returns
+// nil, false, otherwise it returns the value and true.
+func (d *PasswordDigest) PlainText() (digest *plaintext.Digest, ok bool) {
+	switch raw := d.Digest.(type) {
+	case *plaintext.Digest:
+		return raw, true
+	default:
+		return nil, false
+	}
+}
+
 // IsPlainText returns true if the underlying algorithm.Digest is a *plaintext.Digest.
-func (d *PasswordDigest) IsPlainText() bool {
+func (d *PasswordDigest) IsPlainText() (is bool) {
 	if d == nil || d.Digest == nil {
 		return false
 	}
@@ -152,6 +96,50 @@ func (d *PasswordDigest) IsPlainText() bool {
 	default:
 		return false
 	}
+}
+
+// Valid returns true if this digest has a value.
+func (d *PasswordDigest) Valid() (valid bool) {
+	return d != nil && d.Digest != nil
+}
+
+// GetPlainTextValue returns a *plaintext.Digest's byte value from Key() and an error. If the PasswordDigest is not a
+// plaintext.Digest then it returns nil and an error, otherwise it returns the value and nil.
+func (d *PasswordDigest) GetPlainTextValue() (value []byte, err error) {
+	if d == nil || d.Digest == nil {
+		return nil, errors.New("error: nil value")
+	}
+
+	switch digest := d.Digest.(type) {
+	case *plaintext.Digest:
+		return digest.Key(), nil
+	default:
+		return nil, errors.New("error: digest isn't plaintext")
+	}
+}
+
+// UnmarshalYAML decodes the YAML value into this PasswordDigest.
+func (d *PasswordDigest) UnmarshalYAML(value *yaml.Node) (err error) {
+	digestRaw := ""
+
+	if err = value.Decode(&digestRaw); err != nil {
+		return err
+	}
+
+	if d.Digest, err = DecodeAlgorithmDigest(digestRaw); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// MarshalYAML encodes this PasswordDigest as a YAML value.
+func (d *PasswordDigest) MarshalYAML() (value any, err error) {
+	if !d.Valid() {
+		return nil, nil
+	}
+
+	return d.String(), nil
 }
 
 // NewX509CertificateChain creates a new *X509CertificateChain from a given string, parsing each PEM block one by one.
@@ -196,32 +184,54 @@ func NewX509CertificateChain(in string) (chain *X509CertificateChain, err error)
 	return chain, nil
 }
 
+// NewX509CertificateChainFromCerts returns a chain from a given list of certificates without validation.
+func NewX509CertificateChainFromCerts(in []*x509.Certificate) (chain X509CertificateChain) {
+	return X509CertificateChain{certs: in}
+}
+
 // NewTLSVersion returns a new TLSVersion given a string.
 func NewTLSVersion(input string) (version *TLSVersion, err error) {
 	switch strings.ReplaceAll(strings.ToUpper(input), " ", "") {
-	case TLSVersion13, Version13:
+	case TLSVersion13, Version13, tls.VersionName(tls.VersionTLS13):
 		return &TLSVersion{tls.VersionTLS13}, nil
-	case TLSVersion12, Version12:
+	case TLSVersion12, Version12, tls.VersionName(tls.VersionTLS12):
 		return &TLSVersion{tls.VersionTLS12}, nil
-	case TLSVersion11, Version11:
+	case TLSVersion11, Version11, tls.VersionName(tls.VersionTLS11):
 		return &TLSVersion{tls.VersionTLS11}, nil
-	case TLSVersion10, Version10:
+	case TLSVersion10, Version10, tls.VersionName(tls.VersionTLS10):
 		return &TLSVersion{tls.VersionTLS10}, nil
-	case SSLVersion30:
+	case SSLVersion30, strings.ToUpper(tls.VersionName(tls.VersionSSL30)): //nolint:staticcheck
 		return &TLSVersion{tls.VersionSSL30}, nil //nolint:staticcheck
 	}
 
 	return nil, ErrTLSVersionNotSupported
 }
 
-// TLSVersion is a struct which handles tls.Config versions.
+// TLSVersion is a struct which handles [tls.Config] versions.
 type TLSVersion struct {
 	Value uint16
 }
 
+// JSONSchema returns the JSON Schema information for the TLSVersion type.
+func (TLSVersion) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		Type: jsonschema.TypeString,
+		Enum: []any{
+			"TLS 1.0",
+			"TLS1.0",
+			"TLS 1.1",
+			"TLS1.1",
+			"TLS 1.2",
+			"TLS1.2",
+			"TLS 1.3",
+			"TLS1.3",
+		},
+	}
+}
+
 // MaxVersion returns the value of this as a MaxVersion value.
 func (v *TLSVersion) MaxVersion() uint16 {
-	if v.Value == 0 {
+	if v == nil || v.Value == 0 {
 		return tls.VersionTLS13
 	}
 
@@ -230,7 +240,7 @@ func (v *TLSVersion) MaxVersion() uint16 {
 
 // MinVersion returns the value of this as a MinVersion value.
 func (v *TLSVersion) MinVersion() uint16 {
-	if v.Value == 0 {
+	if v == nil || v.Value == 0 {
 		return tls.VersionTLS12
 	}
 
@@ -239,31 +249,38 @@ func (v *TLSVersion) MinVersion() uint16 {
 
 // String provides the Stringer.
 func (v *TLSVersion) String() string {
-	switch v.Value {
-	case tls.VersionTLS10:
-		return TLSVersion10
-	case tls.VersionTLS11:
-		return TLSVersion11
-	case tls.VersionTLS12:
-		return TLSVersion12
-	case tls.VersionTLS13:
-		return TLSVersion13
-	case tls.VersionSSL30: //nolint:staticcheck
-		return SSLVersion30
-	default:
-		return ""
+	if name := tls.VersionName(v.Value); !strings.HasPrefix(name, "0x") {
+		return name
 	}
+
+	return ""
 }
 
-// CryptographicPrivateKey represents the actual crypto.PrivateKey interface.
+// MarshalYAML encodes this TLSVersion as a YAML value.
+func (v TLSVersion) MarshalYAML() (any, error) {
+	return v.String(), nil
+}
+
+// CryptographicPrivateKey represents the actual [crypto.PrivateKey] interface.
 type CryptographicPrivateKey interface {
 	Public() crypto.PublicKey
 	Equal(x crypto.PrivateKey) bool
 }
 
-// X509CertificateChain is a helper struct that holds a list of *x509.Certificate's.
+// CryptographicKey represents an artificial cryptographic public or private key.
+type CryptographicKey any
+
+// X509CertificateChain is a helper struct that holds a list of *[x509.Certificate] values.
 type X509CertificateChain struct {
 	certs []*x509.Certificate
+}
+
+// JSONSchema returns the JSON Schema information for the X509CertificateChain type.
+func (X509CertificateChain) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		Type:    jsonschema.TypeString,
+		Pattern: `^(-{5}BEGIN CERTIFICATE-{5}\n([a-zA-Z0-9\/+]{1,64}\n)+([a-zA-Z0-9\/+]{1,64}[=]{0,2})\n-{5}END CERTIFICATE-{5}\n?)+$`,
+	}
 }
 
 // Thumbprint returns the Thumbprint for the first certificate.
@@ -284,7 +301,7 @@ func (c *X509CertificateChain) HasCertificates() (has bool) {
 	return len(c.certs) != 0
 }
 
-// Equal checks if the provided *x509.Certificate is equal to the first *x509.Certificate in the chain.
+// Equal checks if the provided *[x509.Certificate] is equal to the first *[x509.Certificate] in the chain.
 func (c *X509CertificateChain) Equal(other *x509.Certificate) (equal bool) {
 	if len(c.certs) == 0 {
 		return false
@@ -363,13 +380,35 @@ func (c *X509CertificateChain) CertificatesRaw() (certificates [][]byte) {
 	return certificates
 }
 
-// Leaf returns the first certificate if available for use with tls.Certificate.
+// Leaf returns the first certificate if available for use with [tls.Certificate].
 func (c *X509CertificateChain) Leaf() (leaf *x509.Certificate) {
 	if !c.HasCertificates() {
 		return nil
 	}
 
 	return c.certs[0]
+}
+
+// EncodePEM encodes the entire chain as PEM bytes.
+func (c *X509CertificateChain) EncodePEM() (encoded []byte, err error) {
+	if !c.HasCertificates() {
+		return nil, nil
+	}
+
+	buf := &bytes.Buffer{}
+
+	for _, cert := range c.certs {
+		block := pem.Block{
+			Type:  blockCERTIFICATE,
+			Bytes: cert.Raw,
+		}
+
+		if err = pem.Encode(buf, &block); err != nil {
+			return nil, err
+		}
+	}
+
+	return buf.Bytes(), nil
 }
 
 // Validate the X509CertificateChain ensuring the certificates were provided in the correct order
@@ -397,4 +436,244 @@ func (c *X509CertificateChain) Validate() (err error) {
 	}
 
 	return nil
+}
+
+// NewRefreshIntervalDuration returns a RefreshIntervalDuration given a [time.Duration].
+func NewRefreshIntervalDuration(value time.Duration) RefreshIntervalDuration {
+	return RefreshIntervalDuration{value: value, valid: true}
+}
+
+// NewRefreshIntervalDurationAlways returns a RefreshIntervalDuration with an always value.
+func NewRefreshIntervalDurationAlways() RefreshIntervalDuration {
+	return RefreshIntervalDuration{valid: true, always: true}
+}
+
+// NewRefreshIntervalDurationNever returns a RefreshIntervalDuration with a never value.
+func NewRefreshIntervalDurationNever() RefreshIntervalDuration {
+	return RefreshIntervalDuration{valid: true, never: true}
+}
+
+// RefreshIntervalDuration is a special [time.Duration] for the refresh interval.
+type RefreshIntervalDuration struct {
+	value  time.Duration
+	valid  bool
+	always bool
+	never  bool
+}
+
+// Valid returns true if the value was correctly newed up.
+func (d RefreshIntervalDuration) Valid() bool {
+	return d.valid
+}
+
+// Update returns true if the session could require updates.
+func (d RefreshIntervalDuration) Update() bool {
+	return !d.never && !d.always
+}
+
+// Always returns true if the interval is always.
+func (d RefreshIntervalDuration) Always() bool {
+	return d.always
+}
+
+// Never returns true if the interval is never.
+func (d RefreshIntervalDuration) Never() bool {
+	return d.never
+}
+
+// Value returns the [time.Duration].
+func (d RefreshIntervalDuration) Value() time.Duration {
+	return d.value
+}
+
+// JSONSchema provides the json-schema formatting.
+func (RefreshIntervalDuration) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		Default: "5 minutes",
+		OneOf: []*jsonschema.Schema{
+			{
+				Type: jsonschema.TypeString,
+				Enum: []any{"always", "never"},
+			},
+			{
+				Type:    jsonschema.TypeString,
+				Pattern: `^\d+\s*(y|M|w|d|h|m|s|ms|((year|month|week|day|hour|minute|second|millisecond)s?))(\s*(\s+and\s+)?\d+\s*(y|M|w|d|h|m|s|ms|((year|month|week|day|hour|minute|second|millisecond)s?)))*$`,
+			},
+			{
+				Type:        jsonschema.TypeInteger,
+				Description: "The duration in seconds",
+			},
+		},
+	}
+}
+
+// IdentityProvidersOpenIDConnectClientURIs represents a list of client URIs.
+type IdentityProvidersOpenIDConnectClientURIs []string
+
+// JSONSchema returns the JSON Schema for this type.
+func (IdentityProvidersOpenIDConnectClientURIs) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{
+			&jsonschemaURI,
+			{
+				Type:        jsonschema.TypeArray,
+				Items:       &jsonschemaURI,
+				UniqueItems: true,
+			},
+		},
+	}
+}
+
+// AccessControlRuleDomains represents the ACL domains criteria type.
+type AccessControlRuleDomains []string
+
+// JSONSchema returns the JSON Schema for this type.
+func (AccessControlRuleDomains) JSONSchema() *jsonschema.Schema {
+	return &jsonschemaWeakStringUniqueSlice
+}
+
+// AccessControlRuleMethods represents the ACL methods criteria type.
+type AccessControlRuleMethods []string
+
+// JSONSchema returns the JSON Schema for this type.
+func (AccessControlRuleMethods) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{
+			&jsonschemaACLMethod,
+			{
+				Type:        jsonschema.TypeArray,
+				Items:       &jsonschemaACLMethod,
+				UniqueItems: true,
+			},
+		},
+	}
+}
+
+// AccessControlRuleRegexCI represents the ACL AccessControlRuleSubjects type.
+type AccessControlRuleRegexCI []RegexpCI
+
+// ToRegexp returns the [AccessControlRuleRegexCI] values as a slice of [regexp.Regexp].
+func (acl AccessControlRuleRegexCI) ToRegexp() []regexp.Regexp {
+	regexps := make([]regexp.Regexp, len(acl))
+
+	for i, r := range acl {
+		regexps[i] = r.Regexp
+	}
+
+	return regexps
+}
+
+// JSONSchema returns the [jsonschema.Schema] for the [AccessControlRuleRegexCI] type.
+func (AccessControlRuleRegexCI) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{
+			{
+				Type:   jsonschema.TypeString,
+				Format: jsonschema.FormatStringRegex,
+			},
+			{
+				Type: jsonschema.TypeArray,
+				Items: &jsonschema.Schema{
+					Type:   jsonschema.TypeString,
+					Format: jsonschema.FormatStringRegex,
+				},
+				UniqueItems: true,
+			},
+		},
+	}
+}
+
+// AccessControlRuleRegex represents the ACL AccessControlRuleSubjects type.
+type AccessControlRuleRegex []regexp.Regexp
+
+// JSONSchema returns the JSON Schema for this type.
+func (AccessControlRuleRegex) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{
+			{
+				Type:   jsonschema.TypeString,
+				Format: jsonschema.FormatStringRegex,
+			},
+			{
+				Type: jsonschema.TypeArray,
+				Items: &jsonschema.Schema{
+					Type:   jsonschema.TypeString,
+					Format: jsonschema.FormatStringRegex,
+				},
+				UniqueItems: true,
+			},
+		},
+	}
+}
+
+// AccessControlRuleSubjects represents the ACL AccessControlRuleSubjects type.
+type AccessControlRuleSubjects [][]string
+
+// JSONSchema returns the JSON Schema for this type.
+func (AccessControlRuleSubjects) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{
+			&jsonschemaACLSubject,
+			{
+				Type:  jsonschema.TypeArray,
+				Items: &jsonschemaACLSubject,
+			},
+			{
+				Type: jsonschema.TypeArray,
+				Items: &jsonschema.Schema{
+					Type:  jsonschema.TypeArray,
+					Items: &jsonschemaACLSubject,
+				},
+				UniqueItems: true,
+			},
+		},
+	}
+}
+
+// CSPTemplate represents a Content Security Policy template.
+type CSPTemplate string
+
+var jsonschemaURI = jsonschema.Schema{
+	Type:   jsonschema.TypeString,
+	Format: jsonschema.FormatStringURI,
+}
+
+var jsonschemaWeakStringUniqueSlice = jsonschema.Schema{
+	OneOf: []*jsonschema.Schema{
+		{
+			Type: jsonschema.TypeString,
+		},
+		{
+			Type: jsonschema.TypeArray,
+			Items: &jsonschema.Schema{
+				Type: jsonschema.TypeString,
+			},
+			UniqueItems: true,
+		},
+	},
+}
+
+var jsonschemaACLSubject = jsonschema.Schema{
+	Type:    jsonschema.TypeString,
+	Pattern: "^(user|group|oauth2:client):.+$",
+}
+
+var jsonschemaACLMethod = jsonschema.Schema{
+	Type: jsonschema.TypeString,
+	Enum: toAnySlice(HTTPMethods),
+}
+
+func toAnySlice[T any](values []T) (result []any) {
+	result = make([]any, len(values))
+
+	for i, value := range values {
+		result[i] = value
+	}
+
+	return result
+}
+
+// RegexpCI is a [regexp.Regexp] which is compiled with the case-insensitive flag applied to the entire pattern.
+type RegexpCI struct {
+	regexp.Regexp
 }

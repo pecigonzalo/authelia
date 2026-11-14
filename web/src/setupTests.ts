@@ -1,46 +1,57 @@
-import matchers, { TestingLibraryMatchers } from "@testing-library/jest-dom/matchers";
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
 
-declare global {
-    namespace Vi {
-        interface JestAssertion<T = any> extends jest.Matchers<void, T>, TestingLibraryMatchers<T, void> {}
-    }
+import "@testing-library/jest-dom";
+import i18n from "i18next";
+import { initReactI18next } from "react-i18next";
+
+await i18n.use(initReactI18next).init({
+    resources: { en: { testNS: {} } },
+});
+
+interface LocalStorageMock {
+    [key: string]: any;
 }
 
-expect.extend(matchers);
-
-const localStorageMock = (function () {
-    let store = {};
+const localStorageMock: LocalStorageMock = (function () {
+    let store: LocalStorageMock = {};
 
     return {
-        getItem(key) {
-            return store[key];
-        },
-
-        setItem(key, value) {
-            store[key] = value;
-        },
-
         clear() {
             store = {};
-        },
-
-        removeItem(key) {
-            delete store[key];
         },
 
         getAll() {
             return store;
         },
+
+        getItem(key: number | string) {
+            return store[key];
+        },
+
+        removeItem(key: number | string) {
+            delete store[key];
+        },
+
+        setItem(key: number | string, value: any) {
+            store[key] = value;
+        },
     };
 })();
 
-Object.defineProperty(window, "localStorage", { value: localStorageMock });
+Object.defineProperty(globalThis, "localStorage", { value: localStorageMock });
 
-document.body.setAttribute("data-basepath", "");
-document.body.setAttribute("data-duoselfenrollment", "true");
-document.body.setAttribute("data-rememberme", "true");
-document.body.setAttribute("data-resetpassword", "true");
-document.body.setAttribute("data-resetpasswordcustomurl", "");
-document.body.setAttribute("data-privacypolicyurl", "");
-document.body.setAttribute("data-privacypolicyaccept", "false");
-document.body.setAttribute("data-theme", "light");
+document.body.dataset.basepath = "";
+document.body.dataset.duoselfenrollment = "true";
+document.body.dataset.rememberme = "true";
+document.body.dataset.resetpassword = "true";
+document.body.dataset.resetpasswordcustomurl = "";
+document.body.dataset.totpappapplestore = "https://apps.apple.com/us/app/google-authenticator/id388497605";
+document.body.dataset.totpappgoogleplay =
+    "https://play.google.com/store/apps/details?id=com.google.android.apps.authenticator2";
+document.body.dataset.registrationurl = "";
+document.body.dataset.privacypolicyurl = "";
+document.body.dataset.privacypolicyaccept = "false";
+document.body.dataset.passkeylogin = "true";
+document.body.dataset.theme = "light";

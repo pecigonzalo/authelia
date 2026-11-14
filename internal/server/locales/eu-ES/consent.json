@@ -1,0 +1,42 @@
+{
+	"Claim": "Eskaera {{name}}",
+	"Client ID": "Bezeroaren ID: {{client_id}}",
+	"Consent Request": "Onarpen Eskaera",
+	"Remember Consent": "Ospatu Onarpena",
+	"Scope": "Baldintza {{name}}",
+	"The above application is requesting the following permissions": "Goiko aplikazioak hurrengo baimenak eskatzen ditu",
+	"This saves this consent as a pre-configured consent for future use": "Honek onartze hau aurretik konfiguratutako onartze gisa gordetzen du",
+	"claims": {
+		"address": "Posta Helbidea",
+		"birthdate": "Jaiotze Data",
+		"email": "E-mail Helbidea",
+		"email_verified": "E-mail Helbidea (Berretsia)",
+		"family_name": "Familia Izena",
+		"gender": "Genero",
+		"given_name": "Izena",
+		"groups": "Talde Kidegoa",
+		"locale": "Hizkuntza / Herrialdea",
+		"middle_name": "Hurko Izena",
+		"name": "Izen Errorea",
+		"nickname": "Mikelo",
+		"phone_number": "Telefono Zenbakia",
+		"phone_number_verified": "Telefono Zenbakia (Berretsia)",
+		"picture": "Irudi URL",
+		"preferred_username": "Lehenetsitako Erabiltzailea",
+		"profile": "Profila URL",
+		"sub": "Identifikatzaile Berezia",
+		"updated_at": "Profile Eguneratze Denbora",
+		"website": "Webgune URL",
+		"zoneinfo": "Denbora Zelaia"
+	},
+	"scopes": {
+		"address": "Sartu zure helbidea",
+		"authelia.bearer.authz": "Atzitu babestutako baliabideak konektatuta",
+		"email": "Zure helbide elektronikoetara sartu",
+		"groups": "Sartu zure taldeen kidegoak",
+		"offline_access": "Baieztapen hauek automatikoki eguneratu erabiltzailearen interakziorik gabe",
+		"openid": "Erabili OpenID zure identitate egiaztatzeko",
+		"phone": "Sartu zure telefono zenbakia",
+		"profile": "Sar zaitez zure profilen informazioan"
+	}
+}

@@ -1,13 +1,17 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package handlers
 
 import (
-	// "strings".
 	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"github.com/valyala/fasthttp"
 
 	"github.com/authelia/authelia/v4/internal/mocks"
 )
@@ -41,7 +45,7 @@ func (s *PasswordPolicySuite) TestShouldBeDisabled() {
 	err := json.Unmarshal(s.mock.Ctx.Response.Body(), response)
 
 	require.NoError(s.T(), err)
-	assert.Equal(s.T(), 200, s.mock.Ctx.Response.StatusCode())
+	assert.Equal(s.T(), fasthttp.StatusOK, s.mock.Ctx.Response.StatusCode())
 	assert.Equal(s.T(), "disabled", response.Data.Mode)
 }
 
@@ -57,7 +61,7 @@ func (s *PasswordPolicySuite) TestShouldBeStandard() {
 	err := json.Unmarshal(s.mock.Ctx.Response.Body(), response)
 
 	require.NoError(s.T(), err)
-	assert.Equal(s.T(), 200, s.mock.Ctx.Response.StatusCode())
+	assert.Equal(s.T(), fasthttp.StatusOK, s.mock.Ctx.Response.StatusCode())
 	assert.Equal(s.T(), "standard", response.Data.Mode)
 	assert.Equal(s.T(), 4, response.Data.MinLength)
 	assert.Equal(s.T(), 8, response.Data.MaxLength)
@@ -73,7 +77,7 @@ func (s *PasswordPolicySuite) TestShouldBeZXCVBN() {
 	err := json.Unmarshal(s.mock.Ctx.Response.Body(), response)
 
 	require.NoError(s.T(), err)
-	assert.Equal(s.T(), 200, s.mock.Ctx.Response.StatusCode())
+	assert.Equal(s.T(), fasthttp.StatusOK, s.mock.Ctx.Response.StatusCode())
 	assert.Equal(s.T(), "zxcvbn", response.Data.Mode)
 }
 

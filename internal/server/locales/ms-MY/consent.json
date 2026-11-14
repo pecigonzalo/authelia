@@ -1,0 +1,42 @@
+{
+	"Claim": "Tuntut {{name}}",
+	"Client ID": "ID Pelanggan: {{client_id}}",
+	"Consent Request": "Permintaan Persetujuan",
+	"Remember Consent": "Ingat Persetujuan",
+	"Scope": "Skop {{name}}",
+	"The above application is requesting the following permissions": "Aplikasi di atas sedang meminta kebenaran berikut",
+	"This saves this consent as a pre-configured consent for future use": "Ini menyimpan persetujuan ini sebagai persetujuan yang telah ditetapkan sebelumnya untuk digunakan di masa hadapan",
+	"claims": {
+		"address": "Alamat Pos",
+		"birthdate": "Tarikh Lahir",
+		"email": "Alamat E-mel",
+		"email_verified": "Alamat E-mel (Disahkan)",
+		"family_name": "Nama Keluarga",
+		"gender": "Jantina",
+		"given_name": "Nama Diberi",
+		"groups": "Keanggotaan Kumpulan",
+		"locale": "Bahasa / Lokasi",
+		"middle_name": "Nama Tengah",
+		"name": "Nama Paparan",
+		"nickname": "Nama Pentas",
+		"phone_number": "Nombor Telefon",
+		"phone_number_verified": "Nombor Telefon (Disahkan)",
+		"picture": "URL Gambar",
+		"preferred_username": "Nama Pengguna Pilihan",
+		"profile": "URL Profil",
+		"sub": "Pengenal Pasti Unik",
+		"updated_at": "Masa Kemas kini Profil",
+		"website": "URL Laman Web",
+		"zoneinfo": "Zon Masa"
+	},
+	"scopes": {
+		"address": "Akses ke alamat anda",
+		"authelia.bearer.authz": "Akses sumber yang dilindungi log masuk sebagai anda",
+		"email": "Akses ke alamat e-mel anda",
+		"groups": "Akses ke keanggotaan kumpulan anda",
+		"offline_access": "Segar semula kebenaran ini secara automatik tanpa interaksi pengguna",
+		"openid": "Gunakan OpenID untuk mengesahkan identiti anda",
+		"phone": "Akses ke nombor telefon anda",
+		"profile": "Akses maklumat profil anda"
+	}
+}

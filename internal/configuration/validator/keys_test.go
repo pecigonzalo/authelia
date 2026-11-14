@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package validator
 
 import (
@@ -13,20 +17,20 @@ import (
 
 func TestShouldValidateGoodKeys(t *testing.T) {
 	configKeys := schema.Keys
-	val := schema.NewStructValidator()
-	ValidateKeys(configKeys, "AUTHELIA_", val)
+	validator := schema.NewStructValidator()
+	ValidateKeys(configKeys, nil, "AUTHELIA_", validator)
 
-	require.Len(t, val.Errors(), 0)
+	require.Len(t, validator.Errors(), 0)
 }
 
 func TestShouldNotValidateBadKeys(t *testing.T) {
 	configKeys := schema.Keys
 	configKeys = append(configKeys, "bad_key")
 	configKeys = append(configKeys, "totp.skewy")
-	val := schema.NewStructValidator()
-	ValidateKeys(configKeys, "AUTHELIA_", val)
+	validator := schema.NewStructValidator()
+	ValidateKeys(configKeys, nil, "AUTHELIA_", validator)
 
-	errs := val.Errors()
+	errs := validator.Errors()
 	require.Len(t, errs, 2)
 
 	assert.EqualError(t, errs[0], "configuration key not expected: bad_key")
@@ -38,11 +42,11 @@ func TestShouldNotValidateBadEnvKeys(t *testing.T) {
 	configKeys = append(configKeys, "AUTHELIA__BAD_ENV_KEY")
 	configKeys = append(configKeys, "AUTHELIA_BAD_ENV_KEY")
 
-	val := schema.NewStructValidator()
-	ValidateKeys(configKeys, "AUTHELIA_", val)
+	validator := schema.NewStructValidator()
+	ValidateKeys(configKeys, nil, "AUTHELIA_", validator)
 
-	warns := val.Warnings()
-	assert.Len(t, val.Errors(), 0)
+	warns := validator.Warnings()
+	assert.Len(t, validator.Errors(), 0)
 	require.Len(t, warns, 2)
 
 	assert.EqualError(t, warns[0], "configuration environment variable not expected: AUTHELIA__BAD_ENV_KEY")
@@ -54,7 +58,6 @@ func TestAllSpecificErrorKeys(t *testing.T) {
 
 	var uniqueValues []string
 
-	// Setup configKeys and uniqueValues expected.
 	for key, value := range specificErrorKeys {
 		configKeys = append(configKeys, key)
 
@@ -63,10 +66,10 @@ func TestAllSpecificErrorKeys(t *testing.T) {
 		}
 	}
 
-	val := schema.NewStructValidator()
-	ValidateKeys(configKeys, "AUTHELIA_", val)
+	validator := schema.NewStructValidator()
+	ValidateKeys(configKeys, nil, "AUTHELIA_", validator)
 
-	errs := val.Errors()
+	errs := validator.Errors()
 
 	// Check only unique errors are shown. Require because if we don't the next test panics.
 	require.Len(t, errs, len(uniqueValues))
@@ -87,10 +90,10 @@ func TestSpecificErrorKeys(t *testing.T) {
 		"authentication_backend.file.hashing.algorithm",
 	}
 
-	val := schema.NewStructValidator()
-	ValidateKeys(configKeys, "AUTHELIA_", val)
+	validator := schema.NewStructValidator()
+	ValidateKeys(configKeys, nil, "AUTHELIA_", validator)
 
-	errs := val.Errors()
+	errs := validator.Errors()
 
 	require.Len(t, errs, 5)
 
@@ -99,6 +102,149 @@ func TestSpecificErrorKeys(t *testing.T) {
 	assert.EqualError(t, errs[2], specificErrorKeys["authentication_backend.file.password_options.iterations"])
 	assert.EqualError(t, errs[3], specificErrorKeys["authentication_backend.file.password_hashing.algorithm"])
 	assert.EqualError(t, errs[4], specificErrorKeys["authentication_backend.file.hashing.algorithm"])
+}
+
+func TestPatternKeys(t *testing.T) {
+	configKeys := []string{
+		"server.endpoints.authz.xx.implementation",
+		"server.endpoints.authz.x.implementation",
+	}
+
+	validator := schema.NewStructValidator()
+	ValidateKeys(configKeys, nil, "AUTHELIA_", validator)
+
+	errs := validator.Errors()
+
+	require.Len(t, errs, 0)
+}
+
+func TestPatternKeysWithDottedMapKeySegments(t *testing.T) {
+	testCases := []struct {
+		name string
+		keys []string
+	}{
+		{
+			"ScopeWithDot",
+			[]string{
+				"identity_providers.oidc.scopes.my.scope",
+				"identity_providers.oidc.scopes.my.scope.claims",
+			},
+		},
+		{
+			"ClaimsPolicyWithDot",
+			[]string{
+				"identity_providers.oidc.claims_policies.my.policy",
+				"identity_providers.oidc.claims_policies.my.policy.id_token",
+				"identity_providers.oidc.claims_policies.my.policy.custom_claims",
+			},
+		},
+		{
+			"CustomClaimWithDot",
+			[]string{
+				"identity_providers.oidc.claims_policies.test.custom_claims.http://example.com/claim",
+				"identity_providers.oidc.claims_policies.test.custom_claims.http://example.com/claim.name",
+				"identity_providers.oidc.claims_policies.test.custom_claims.http://example.com/claim.attribute",
+			},
+		},
+		{
+			"AuthorizationPolicyWithDot",
+			[]string{
+				"identity_providers.oidc.authorization_policies.my.policy",
+				"identity_providers.oidc.authorization_policies.my.policy.default_policy",
+			},
+		},
+		{
+			"CustomLifespanWithDot",
+			[]string{
+				"identity_providers.oidc.lifespans.custom.my.lifespan",
+				"identity_providers.oidc.lifespans.custom.my.lifespan.access_token",
+			},
+		},
+		{
+			"ServerEndpointWithDot",
+			[]string{
+				"server.endpoints.authz.my.endpoint",
+				"server.endpoints.authz.my.endpoint.implementation",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			validator := schema.NewStructValidator()
+			ValidateKeys(tc.keys, nil, "AUTHELIA_", validator)
+
+			assert.Len(t, validator.Errors(), 0, "keys with dots in map key segments should be accepted: %v", tc.keys)
+			assert.Len(t, validator.Warnings(), 0)
+		})
+	}
+}
+
+func TestPatternKeysWithSpecialCharactersInMapKeySegments(t *testing.T) {
+	testCases := []struct {
+		name string
+		keys []string
+	}{
+		{
+			"Colon",
+			[]string{
+				"identity_providers.oidc.scopes.urn:example:scope",
+				"identity_providers.oidc.scopes.urn:example:scope.claims",
+			},
+		},
+		{
+			"ColonInURI",
+			[]string{
+				"identity_providers.oidc.claims_policies.test.custom_claims.http://example.com:8080/claim",
+				"identity_providers.oidc.claims_policies.test.custom_claims.http://example.com:8080/claim.name",
+			},
+		},
+		{
+			"MultipleDots",
+			[]string{
+				"identity_providers.oidc.scopes.org.example.scope.v2",
+				"identity_providers.oidc.scopes.org.example.scope.v2.claims",
+			},
+		},
+		{
+			"Tilde",
+			[]string{
+				"identity_providers.oidc.scopes.scope~draft",
+				"identity_providers.oidc.scopes.scope~draft.claims",
+			},
+		},
+		{
+			"Slash",
+			[]string{
+				"identity_providers.oidc.scopes.org/scope",
+				"identity_providers.oidc.scopes.org/scope.claims",
+			},
+		},
+		{
+			"MixedSpecialChars",
+			[]string{
+				"identity_providers.oidc.scopes.urn:ietf:params:oauth:scope:example.read",
+				"identity_providers.oidc.scopes.urn:ietf:params:oauth:scope:example.read.claims",
+			},
+		},
+		{
+			"URNStyle",
+			[]string{
+				"identity_providers.oidc.scopes.urn:authelia:scope:pam",
+				"identity_providers.oidc.scopes.urn:authelia:scope:pam.claims",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			validator := schema.NewStructValidator()
+			ValidateKeys(tc.keys, nil, "AUTHELIA_", validator)
+
+			assert.Len(t, validator.Errors(), 0, "keys with special characters in map key segments should be accepted: %v", tc.keys)
+			assert.Len(t, validator.Warnings(), 0)
+		})
+	}
 }
 
 func TestReplacedErrors(t *testing.T) {
@@ -110,11 +256,11 @@ func TestReplacedErrors(t *testing.T) {
 		"logs_level",
 	}
 
-	val := schema.NewStructValidator()
-	ValidateKeys(configKeys, "AUTHELIA_", val)
+	validator := schema.NewStructValidator()
+	ValidateKeys(configKeys, nil, "AUTHELIA_", validator)
 
-	warns := val.Warnings()
-	errs := val.Errors()
+	warns := validator.Warnings()
+	errs := validator.Errors()
 
 	assert.Len(t, warns, 0)
 	require.Len(t, errs, 5)

@@ -1,0 +1,175 @@
+---
+# SPDX-FileCopyrightText: 2026 Authelia
+#
+# SPDX-License-Identifier: Apache-2.0
+
+title: "Server Authz Endpoints"
+description: "Configuring the Authelia server authorization endpoints including ForwardAuth, ExtAuthz, AuthRequest, and Legacy implementations with authentication strategies."
+summary: "Authelia supports several authorization endpoints on the internal web server. This section describes how to configure and tune them."
+date: 2024-03-14T06:00:14+11:00
+draft: false
+images: []
+menu:
+configuration:
+parent: "miscellaneous"
+weight: 199210
+toc: true
+aliases:
+  - /c/authz
+seo:
+  title: "" # custom title (optional)
+  description: "" # custom description (recommended)
+  canonical: "" # custom canonical URL (optional)
+  noindex: false # false (default) or true
+---
+
+## Configuration
+
+{{< config-alert-example >}}
+
+```yaml {title=configuration.yml}
+server:
+  endpoints:
+    authz:
+      forward-auth:
+        implementation: 'ForwardAuth'
+        headers:
+          Remote-User:
+            user_attribute: 'username'
+          Remote-Groups:
+            user_attribute: 'groups'
+          Remote-Name:
+            user_attribute: 'display_name'
+          Remote-Email:
+            user_attribute: 'email'
+        authn_strategies:
+          - name: 'HeaderAuthorization'
+            schemes:
+              - 'Basic'
+            scheme_basic_cache_lifespan: 0
+          - name: 'CookieSession'
+      ext-authz:
+        implementation: 'ExtAuthz'
+        headers:
+          Remote-User:
+            user_attribute: 'username'
+          Remote-Groups:
+            user_attribute: 'groups'
+          Remote-Name:
+            user_attribute: 'display_name'
+          Remote-Email:
+            user_attribute: 'email'
+        authn_strategies:
+          - name: 'HeaderAuthorization'
+            schemes:
+              - 'Basic'
+            scheme_basic_cache_lifespan: 0
+          - name: 'CookieSession'
+      auth-request:
+        implementation: 'AuthRequest'
+        headers:
+          Remote-User:
+            user_attribute: 'username'
+          Remote-Groups:
+            user_attribute: 'groups'
+          Remote-Name:
+            user_attribute: 'display_name'
+          Remote-Email:
+            user_attribute: 'email'
+        authn_strategies:
+          - name: 'HeaderAuthorization'
+            schemes:
+              - 'Basic'
+            scheme_basic_cache_lifespan: 0
+          - name: 'CookieSession'
+      legacy:
+        implementation: 'Legacy'
+```
+
+## name
+
+{{< confkey type="string" required="yes" >}}
+
+The first level under the `authz` directive is the name of the endpoint. In the example these names are `forward-auth`,
+`ext-authz`, `auth-request`, and `legacy`.
+
+The name correlates with the path of the endpoint. All endpoints start with `/api/authz/`, and end with the name. In the
+example the `forward-auth` endpoint has a full path of `/api/authz/forward-auth`.
+
+Valid characters for the name are alphanumeric as well as `-`, `_`, and `/`. They MUST start AND end with an
+alphanumeric character.
+
+### implementation
+
+{{< confkey type="string" required="yes" >}}
+
+The underlying implementation for the endpoint. Valid case-sensitive values are `ForwardAuth`, `ExtAuthz`,
+`AuthRequest`, and `Legacy`. Read more about the implementations in the
+[reference guide](../../reference/guides/proxy-authorization.md#implementations).
+
+### disable_access_denied_redirect
+
+{{< confkey type="boolean" default="false" required="no" >}}
+
+Disables redirecting users who are denied by an access control rule to the access denied page, responding with the
+[403 Forbidden](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403) status instead. This restores the
+behavior from before the access denied page existed, and is useful for an endpoint which predominantly serves API
+clients. It has no effect on the `Legacy` implementation which always responds with the
+[403 Forbidden](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403) status.
+
+### headers
+
+{{< confkey type="dictionary(object)" required="no" >}}
+
+The headers value contains a dictionary where the dictionary key is the header name and the dictionary value is an
+object which determines the header value.
+
+The header name must only contain valid header name characters, and must not be a standard or otherwise reserved header
+such as `Content-Type`, `Location`, `Set-Cookie`, `WWW-Authenticate`, or any of the `Access-Control-*`, `X-Forwarded-*`,
+and `X-Original-*` headers. As header names are case-insensitive the same header must not be configured more than once
+in differing cases.
+
+Configuring this option replaces the default headers entirely, so the `Remote-User`, `Remote-Groups`, `Remote-Name`, and
+`Remote-Email` headers must be included if they are still required.
+
+#### user_attribute
+
+{{< confkey type="string" required="yes" >}}
+
+The user attribute to derive the header value from. This attribute can be one available from the authentication backend
+or one determined via the [User Attribute Definitions](../definitions/user-attributes.md). Attribute names which are not
+known to Authelia, and attributes which are not mapped by the configured authentication backend, cause a startup error.
+
+Attributes which resolve to a list are joined with a comma.
+
+### authn_strategies
+
+{{< confkey type="list" required="no" >}}
+
+A list of authentication strategies and their configuration options. These strategies are in order, and the first one
+which succeeds is used. Failures other than lacking the sufficient information in the request to perform the strategy
+immediately short-circuit the authentication, otherwise the next strategy in the list is attempted.
+
+#### name
+
+{{< confkey type="string" required="yes" >}}
+
+The name of the strategy. Valid case-sensitive values are `CookieSession`, `HeaderAuthorization`,
+`HeaderProxyAuthorization`, `HeaderAuthRequestProxyAuthorization`, and `HeaderLegacy`. Read more about the strategies in
+the [reference guide](../../reference/guides/proxy-authorization.md#authn-strategies).
+
+#### schemes
+
+{{< confkey type="list(string)" default="Basic" required="no" >}}
+
+The list of schemes allowed on this endpoint. Options are `Basic`, and `Bearer`. This option is only applicable to the
+`HeaderAuthorization`, `HeaderProxyAuthorization`, and `HeaderAuthRequestProxyAuthorization` strategies and unavailable
+with the `legacy` endpoint which only uses `Basic`.
+
+#### scheme_basic_cache_lifespan
+
+{{< confkey type="string,integer" syntax="duration" default="0 seconds" required="no" >}}
+
+The lifespan to cache username and password combinations when using the `Basic` scheme. This option enables the use
+of the caching which is completely disabled by default. This option must only be used when the `Basic` scheme is
+configured, and like all new options may not be used with the `Legacy` implementation.

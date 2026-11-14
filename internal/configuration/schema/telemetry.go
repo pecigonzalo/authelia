@@ -1,28 +1,32 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package schema
 
 import (
-	"net"
+	"net/url"
 	"time"
 )
 
-// TelemetryConfig represents the telemetry config.
-type TelemetryConfig struct {
-	Metrics TelemetryMetricsConfig `koanf:"metrics"`
+// Telemetry represents the telemetry config.
+type Telemetry struct {
+	Metrics TelemetryMetrics `koanf:"metrics" yaml:"metrics,omitempty" toml:"metrics,omitempty" json:"metrics,omitempty" jsonschema:"title=Metrics" jsonschema_description:"The telemetry metrics server configuration."`
 }
 
-// TelemetryMetricsConfig represents the telemetry metrics config.
-type TelemetryMetricsConfig struct {
-	Enabled bool     `koanf:"enabled"`
-	Address *Address `koanf:"address"`
+// TelemetryMetrics represents the telemetry metrics config.
+type TelemetryMetrics struct {
+	Enabled bool        `koanf:"enabled" yaml:"enabled" toml:"enabled" json:"enabled" jsonschema:"default=false,title=Enabled" jsonschema_description:"Enables the metrics server."`
+	Address *AddressTCP `koanf:"address" yaml:"address,omitempty" toml:"address,omitempty" json:"address,omitempty" jsonschema:"default=tcp://:9959/,title=Address" jsonschema_description:"The address for the metrics server to listen on."`
 
-	Buffers  ServerBuffers  `koanf:"buffers"`
-	Timeouts ServerTimeouts `koanf:"timeouts"`
+	Buffers  ServerBuffers  `koanf:"buffers" yaml:"buffers,omitempty" toml:"buffers,omitempty" json:"buffers,omitempty" jsonschema:"title=Buffers" jsonschema_description:"The server buffers configuration for the metrics server."`
+	Timeouts ServerTimeouts `koanf:"timeouts" yaml:"timeouts,omitempty" toml:"timeouts,omitempty" json:"timeouts,omitempty" jsonschema:"title=Timeouts" jsonschema_description:"The server timeouts configuration for the metrics server."`
 }
 
 // DefaultTelemetryConfig is the default telemetry configuration.
-var DefaultTelemetryConfig = TelemetryConfig{
-	Metrics: TelemetryMetricsConfig{
-		Address: &Address{true, "tcp", net.ParseIP("0.0.0.0"), 9959},
+var DefaultTelemetryConfig = Telemetry{
+	Metrics: TelemetryMetrics{
+		Address: &AddressTCP{Address{true, false, -1, 9959, nil, &url.URL{Scheme: AddressSchemeTCP, Host: ":9959", Path: "/metrics"}}},
 		Buffers: ServerBuffers{
 			Read:  4096,
 			Write: 4096,

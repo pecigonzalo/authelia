@@ -1,6 +1,11 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package model
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -51,23 +56,44 @@ type SemanticVersion struct {
 	Metadata   []string
 }
 
+// Copy the values for this SemanticVersion.
+func (v SemanticVersion) Copy() SemanticVersion {
+	return SemanticVersion{
+		Major:      v.Major,
+		Minor:      v.Minor,
+		Patch:      v.Patch,
+		PreRelease: v.PreRelease,
+		Metadata:   v.Metadata,
+	}
+}
+
+// IsStable returns true if the pre release and metadata values are empty and the major value is above 0.
+func (v SemanticVersion) IsStable() bool {
+	return v.IsAbsolute() && v.Major > 0
+}
+
+// IsAbsolute returns true if the pre release and metadata values are empty.
+func (v SemanticVersion) IsAbsolute() bool {
+	return len(v.PreRelease) == 0 && len(v.Metadata) == 0
+}
+
 // String is a function to provide a nice representation of a SemanticVersion.
 func (v SemanticVersion) String() (value string) {
-	builder := strings.Builder{}
+	buf := bytes.NewBuffer(nil)
 
-	builder.WriteString(fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch))
+	_, _ = fmt.Fprintf(buf, "%d.%d.%d", v.Major, v.Minor, v.Patch)
 
 	if len(v.PreRelease) != 0 {
-		builder.WriteString("-")
-		builder.WriteString(strings.Join(v.PreRelease, "."))
+		buf.WriteString("-")
+		buf.WriteString(strings.Join(v.PreRelease, "."))
 	}
 
 	if len(v.Metadata) != 0 {
-		builder.WriteString("+")
-		builder.WriteString(strings.Join(v.Metadata, "."))
+		buf.WriteString("+")
+		buf.WriteString(strings.Join(v.Metadata, "."))
 	}
 
-	return builder.String()
+	return buf.String()
 }
 
 // Equal returns true if this SemanticVersion is equal to the provided SemanticVersion.
@@ -117,4 +143,19 @@ func (v SemanticVersion) GreaterThanOrEqual(version SemanticVersion) (ge bool) {
 // LessThanOrEqual returns true if this SemanticVersion is less than or equal to the provided SemanticVersion.
 func (v SemanticVersion) LessThanOrEqual(version SemanticVersion) (ge bool) {
 	return v.Equal(version) || v.LessThan(version)
+}
+
+// NextMajor returns the next major SemanticVersion from this current SemanticVersion.
+func (v SemanticVersion) NextMajor() (version SemanticVersion) {
+	return SemanticVersion{Major: v.Major + 1}
+}
+
+// NextMinor returns the next minor SemanticVersion from this current SemanticVersion.
+func (v SemanticVersion) NextMinor() (version SemanticVersion) {
+	return SemanticVersion{Major: v.Major, Minor: v.Minor + 1}
+}
+
+// NextPatch returns the next patch SemanticVersion from this current SemanticVersion.
+func (v SemanticVersion) NextPatch() (version SemanticVersion) {
+	return SemanticVersion{Major: v.Major, Minor: v.Minor, Patch: v.Patch + 1}
 }

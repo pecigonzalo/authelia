@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -23,8 +27,7 @@ func NewBypassAllWebDriverSuite() *BypassAllWebDriverSuite {
 func (s *BypassAllWebDriverSuite) SetupSuite() {
 	s.BaseSuite.SetupSuite()
 
-	browser, err := StartRod()
-
+	browser, err := NewRodSession(RodSessionWithCredentials(s))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -33,16 +36,14 @@ func (s *BypassAllWebDriverSuite) SetupSuite() {
 }
 
 func (s *BypassAllWebDriverSuite) TearDownSuite() {
-	err := s.RodSession.Stop()
-
+	err := s.Stop()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
 func (s *BypassAllWebDriverSuite) SetupTest() {
-	s.Page = s.doCreateTab(s.T(), HomeBaseURL)
-	s.verifyIsHome(s.T(), s.Page)
+	s.doSetupTest(HomeBaseURL)
 }
 
 func (s *BypassAllWebDriverSuite) TearDownTest() {
@@ -52,6 +53,7 @@ func (s *BypassAllWebDriverSuite) TearDownTest() {
 
 func (s *BypassAllWebDriverSuite) TestShouldAccessPublicResource() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
 	defer func() {
 		cancel()
 		s.collectScreenshot(ctx.Err(), s.Page)

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package session
 
 import (
@@ -8,40 +12,94 @@ import (
 	"github.com/authelia/authelia/v4/internal/authorization"
 )
 
-// NewDefaultUserSession create a default user session.
-func NewDefaultUserSession() UserSession {
+// NewUserSession creates a user session for the given username. This is the only supported way to give a session a
+// username, as changing it on a live session would strand the repository lookups which refer to the previous value.
+// A session which should belong to a different user must be destroyed and a new one created in its place.
+func NewUserSession(username string) UserSession {
 	return UserSession{
-		KeepMeLoggedIn:      false,
-		AuthenticationLevel: authentication.NotAuthenticated,
-		LastActivity:        0,
+		Username:       username,
+		KeepMeLoggedIn: false,
+		LastActivity:   0,
 	}
+}
+
+// NewDefaultUserSession create a default anonymous user session.
+func NewDefaultUserSession() UserSession {
+	return NewUserSession("")
 }
 
 // IsAnonymous returns true if the username is empty or the AuthenticationLevel is authentication.NotAuthenticated.
 func (s *UserSession) IsAnonymous() bool {
-	return s.Username == "" || s.AuthenticationLevel == authentication.NotAuthenticated
+	return s.AuthenticationLevel(false) == authentication.NotAuthenticated
 }
 
-// SetOneFactor sets the 1FA AMR's and expected property values for one factor authentication.
-func (s *UserSession) SetOneFactor(now time.Time, details *authentication.UserDetails, keepMeLoggedIn bool) {
-	s.FirstFactorAuthnTimestamp = now.Unix()
-	s.LastActivity = now.Unix()
-	s.AuthenticationLevel = authentication.OneFactor
+// RequiresPersistence returns true if the session holds state which must be persisted to the Repository. Every session
+// which belongs to a user does, whereas an anonymous session only does when it carries state such as a pending WebAuthn
+// ceremony or password reset. The identifiers, activity, and remember me values of an anonymous session are
+// meaningless without a user and are disregarded.
+func (s *UserSession) RequiresPersistence() bool {
+	switch {
+	case s.Username != "",
+		s.FirstFactorAuthnTimestamp != 0,
+		s.SecondFactorAuthnTimestamp != 0,
+		s.AuthenticationMethodRefs.FactorKnowledge(),
+		s.AuthenticationMethodRefs.FactorPossession(),
+		s.AuthenticationMethodRefs.WebAuthnUserPresence,
+		s.AuthenticationMethodRefs.WebAuthnUserVerified,
+		len(s.AuthenticationMethodRefs.Extra) != 0,
+		s.WebAuthn != nil,
+		s.TOTP != nil,
+		s.PasswordResetUsername != nil,
+		s.Elevations.User != nil:
+		return true
+	default:
+		return false
+	}
+}
 
-	s.KeepMeLoggedIn = keepMeLoggedIn
+// AuthenticationLevel returns the authentication.Level for this session.
+func (s *UserSession) AuthenticationLevel(passkey2FA bool) authentication.Level {
+	switch {
+	case s.Username == "":
+		return authentication.NotAuthenticated
+	case s.AuthenticationMethodRefs.FactorPossession() && s.AuthenticationMethodRefs.FactorKnowledge():
+		return authentication.TwoFactor
+	case passkey2FA && s.AuthenticationMethodRefs.WebAuthn && s.AuthenticationMethodRefs.WebAuthnUserVerified:
+		return authentication.TwoFactor
+	case s.AuthenticationMethodRefs.FactorPossession() || s.AuthenticationMethodRefs.FactorKnowledge():
+		return authentication.OneFactor
+	default:
+		return authentication.NotAuthenticated
+	}
+}
 
-	s.Username = details.Username
-	s.DisplayName = details.DisplayName
-	s.Groups = details.Groups
-	s.Emails = details.Emails
+// SetOneFactorPassword sets the 1FA AMR's and expected property values for one factor password authentication. The
+// session must already have been constructed for the authenticating user via NewUserSession.
+func (s *UserSession) SetOneFactorPassword(now time.Time, keepMeLoggedIn bool) {
+	s.setOneFactor(now, keepMeLoggedIn)
 
+	s.AuthenticationMethodRefs.KnowledgeBasedAuthentication = true
 	s.AuthenticationMethodRefs.UsernameAndPassword = true
 }
 
-func (s *UserSession) setTwoFactor(now time.Time) {
-	s.SecondFactorAuthnTimestamp = now.Unix()
+// SetOneFactorPasskey sets the 1FA AMR's and expected property values for one factor passkey authentication. The
+// session must already have been constructed for the authenticating user via NewUserSession.
+func (s *UserSession) SetOneFactorPasskey(now time.Time, keepMeLoggedIn, hardware, userPresence, userVerified bool) {
+	s.setOneFactor(now, keepMeLoggedIn)
+
+	s.setWebAuthn(hardware, userPresence, userVerified)
+}
+
+func (s *UserSession) setOneFactor(now time.Time, keepMeLoggedIn bool) {
+	s.KeepMeLoggedIn = keepMeLoggedIn
+
+	s.SetOneFactorReauthenticate(now)
+}
+
+// SetOneFactorReauthenticate sets the relevant session values when a user reauthenticates with the first factor.
+func (s *UserSession) SetOneFactorReauthenticate(now time.Time) {
+	s.FirstFactorAuthnTimestamp = now.Unix()
 	s.LastActivity = now.Unix()
-	s.AuthenticationLevel = authentication.TwoFactor
 }
 
 // SetTwoFactorTOTP sets the relevant TOTP AMR's and sets the factor to 2FA.
@@ -56,23 +114,72 @@ func (s *UserSession) SetTwoFactorDuo(now time.Time) {
 	s.AuthenticationMethodRefs.Duo = true
 }
 
-// SetTwoFactorWebauthn sets the relevant Webauthn AMR's and sets the factor to 2FA.
-func (s *UserSession) SetTwoFactorWebauthn(now time.Time, userPresence, userVerified bool) {
+// SetTwoFactorWebAuthn sets the relevant WebAuthn AMR's and sets the factor to 2FA.
+func (s *UserSession) SetTwoFactorWebAuthn(now time.Time, hardware, userPresence, userVerified bool) {
 	s.setTwoFactor(now)
-	s.AuthenticationMethodRefs.Webauthn = true
-	s.AuthenticationMethodRefs.WebauthnUserPresence, s.AuthenticationMethodRefs.WebauthnUserVerified = userPresence, userVerified
 
-	s.Webauthn = nil
+	s.setWebAuthn(hardware, userPresence, userVerified)
+}
+
+// SetTwoFactorRecoveryCode sets the relevant recovery code AMR's and sets the factor to 2FA.
+func (s *UserSession) SetTwoFactorRecoveryCode(now time.Time) {
+	s.setTwoFactor(now)
+	s.AuthenticationMethodRefs.RecoveryCode = true
+}
+
+// SetTwoFactorPassword sets the relevant session values when a user authenticates with a password as the second factor.
+func (s *UserSession) SetTwoFactorPassword(now time.Time) {
+	s.setTwoFactor(now)
+
+	s.AuthenticationMethodRefs.KnowledgeBasedAuthentication = true
+	s.AuthenticationMethodRefs.UsernameAndPassword = true
+}
+
+func (s *UserSession) setTwoFactor(now time.Time) {
+	s.SecondFactorAuthnTimestamp = now.Unix()
+	s.LastActivity = now.Unix()
+}
+
+func (s *UserSession) setWebAuthn(hardware, userPresence, userVerified bool) {
+	s.AuthenticationMethodRefs.WebAuthn = true
+	s.AuthenticationMethodRefs.WebAuthnUserPresence, s.AuthenticationMethodRefs.WebAuthnUserVerified = userPresence, userVerified
+
+	if hardware {
+		s.AuthenticationMethodRefs.WebAuthnHardware = true
+	} else {
+		s.AuthenticationMethodRefs.WebAuthnSoftware = true
+	}
+
+	s.WebAuthn = nil
+}
+
+// GetFirstFactorAuthn returns the time the first factor authentication occurred.
+func (s *UserSession) GetFirstFactorAuthn() time.Time {
+	return time.Unix(s.FirstFactorAuthnTimestamp, 0).UTC()
+}
+
+// GetSecondFactorAuthn returns the time the second factor authentication occurred.
+func (s *UserSession) GetSecondFactorAuthn() time.Time {
+	return time.Unix(s.SecondFactorAuthnTimestamp, 0).UTC()
 }
 
 // AuthenticatedTime returns the unix timestamp this session authenticated successfully at the given level.
 func (s *UserSession) AuthenticatedTime(level authorization.Level) (authenticatedTime time.Time, err error) {
 	switch level {
 	case authorization.OneFactor:
-		return time.Unix(s.FirstFactorAuthnTimestamp, 0), nil
+		return s.GetFirstFactorAuthn(), nil
 	case authorization.TwoFactor:
-		return time.Unix(s.SecondFactorAuthnTimestamp, 0), nil
+		return s.GetSecondFactorAuthn(), nil
 	default:
-		return time.Unix(0, 0), errors.New("invalid authorization level")
+		return time.Unix(0, 0).UTC(), errors.New("invalid authorization level")
 	}
+}
+
+// LastAuthenticatedTime returns the most recent time either factor was authenticated.
+func (s *UserSession) LastAuthenticatedTime() (authenticated time.Time) {
+	if s.FirstFactorAuthnTimestamp > s.SecondFactorAuthnTimestamp {
+		return s.GetFirstFactorAuthn()
+	}
+
+	return s.GetSecondFactorAuthn()
 }

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package middlewares
 
 import (
@@ -14,7 +18,7 @@ type PasswordPolicyProvider interface {
 }
 
 // NewPasswordPolicyProvider returns a new password policy provider.
-func NewPasswordPolicyProvider(config schema.PasswordPolicyConfiguration) (provider PasswordPolicyProvider) {
+func NewPasswordPolicyProvider(config schema.PasswordPolicy) (provider PasswordPolicyProvider) {
 	if !config.Standard.Enabled && !config.ZXCVBN.Enabled {
 		return &StandardPasswordPolicyProvider{}
 	}

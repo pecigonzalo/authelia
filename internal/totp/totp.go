@@ -1,25 +1,33 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package totp
 
 import (
 	"encoding/base32"
 	"fmt"
-	"time"
 
-	"github.com/pquerna/otp"
-	"github.com/pquerna/otp/totp"
+	"github.com/authelia/otp"
+	"github.com/authelia/otp/totp"
 
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
 	"github.com/authelia/authelia/v4/internal/model"
 )
 
 // NewTimeBasedProvider creates a new totp.TimeBased which implements the totp.Provider.
-func NewTimeBasedProvider(config schema.TOTPConfiguration) (provider *TimeBased) {
+func NewTimeBasedProvider(config schema.TOTP) (provider *TimeBased) {
 	provider = &TimeBased{
-		config: &config,
+		opts:      NewTOTPOptionsFromSchema(config),
+		issuer:    config.Issuer,
+		algorithm: config.DefaultAlgorithm,
+		digits:    uint32(config.DefaultDigits), //nolint:gosec // Validated at runtime.
+		period:    uint(config.DefaultPeriod),
+		size:      uint(config.SecretSize),
 	}
 
-	if config.Skew != nil {
-		provider.skew = *config.Skew
+	if config.Skew != nil && *config.Skew >= 0 {
+		provider.skew = uint(*config.Skew)
 	} else {
 		provider.skew = 1
 	}
@@ -27,14 +35,32 @@ func NewTimeBasedProvider(config schema.TOTPConfiguration) (provider *TimeBased)
 	return provider
 }
 
+// NewTOTPOptionsFromSchema returns the *model.TOTPOptions for the given TOTP configuration.
+func NewTOTPOptionsFromSchema(config schema.TOTP) *model.TOTPOptions {
+	return &model.TOTPOptions{
+		Algorithm:  config.DefaultAlgorithm,
+		Algorithms: config.AllowedAlgorithms,
+		Period:     config.DefaultPeriod,
+		Periods:    config.AllowedPeriods,
+		Length:     config.DefaultDigits,
+		Lengths:    config.AllowedDigits,
+	}
+}
+
 // TimeBased totp.Provider for production use.
 type TimeBased struct {
-	config *schema.TOTPConfiguration
-	skew   uint
+	opts *model.TOTPOptions
+
+	issuer    string
+	algorithm string
+	digits    uint32
+	period    uint
+	skew      uint
+	size      uint
 }
 
 // GenerateCustom generates a TOTP with custom options.
-func (p TimeBased) GenerateCustom(username, algorithm, secret string, digits, period, secretSize uint) (config *model.TOTPConfiguration, err error) {
+func (p TimeBased) GenerateCustom(ctx Context, username, algorithm, secret string, digits uint32, period, secretSize uint) (config *model.TOTPConfiguration, err error) {
 	var key *otp.Key
 
 	var secretData []byte
@@ -45,24 +71,29 @@ func (p TimeBased) GenerateCustom(username, algorithm, secret string, digits, pe
 		}
 	}
 
+	if secretSize == 0 {
+		secretSize = p.size
+	}
+
 	opts := totp.GenerateOpts{
-		Issuer:      p.config.Issuer,
+		Issuer:      p.issuer,
 		AccountName: username,
 		Period:      period,
 		Secret:      secretData,
 		SecretSize:  secretSize,
 		Digits:      otp.Digits(digits),
 		Algorithm:   otpStringToAlgo(algorithm),
+		Rand:        ctx.GetRandom(),
 	}
 
 	if key, err = totp.Generate(opts); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error generating totp: %w", err)
 	}
 
 	config = &model.TOTPConfiguration{
-		CreatedAt: time.Now(),
+		CreatedAt: ctx.GetClock().Now(),
 		Username:  username,
-		Issuer:    p.config.Issuer,
+		Issuer:    p.issuer,
 		Algorithm: algorithm,
 		Digits:    digits,
 		Secret:    []byte(key.Secret()),
@@ -73,12 +104,12 @@ func (p TimeBased) GenerateCustom(username, algorithm, secret string, digits, pe
 }
 
 // Generate generates a TOTP with default options.
-func (p TimeBased) Generate(username string) (config *model.TOTPConfiguration, err error) {
-	return p.GenerateCustom(username, p.config.Algorithm, "", p.config.Digits, p.config.Period, p.config.SecretSize)
+func (p TimeBased) Generate(ctx Context, username string) (config *model.TOTPConfiguration, err error) {
+	return p.GenerateCustom(ctx, username, p.algorithm, "", p.digits, p.period, p.size)
 }
 
 // Validate the token against the given configuration.
-func (p TimeBased) Validate(token string, config *model.TOTPConfiguration) (valid bool, err error) {
+func (p TimeBased) Validate(ctx Context, token string, config *model.TOTPConfiguration) (valid bool, step uint64, err error) {
 	opts := totp.ValidateOpts{
 		Period:    config.Period,
 		Skew:      p.skew,
@@ -86,5 +117,14 @@ func (p TimeBased) Validate(token string, config *model.TOTPConfiguration) (vali
 		Algorithm: otpStringToAlgo(config.Algorithm),
 	}
 
-	return totp.ValidateCustom(token, string(config.Secret), time.Now().UTC(), opts)
+	return totp.ValidateCustomStep(token, string(config.Secret), ctx.GetClock().Now().UTC(), opts)
 }
+
+// Options returns the configured options for this provider.
+func (p TimeBased) Options() model.TOTPOptions {
+	return *p.opts
+}
+
+var (
+	_ Provider = (*TimeBased)(nil)
+)

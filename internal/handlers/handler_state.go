@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package handlers
 
 import (
@@ -11,7 +15,6 @@ func StateGET(ctx *middlewares.AutheliaCtx) {
 		userSession session.UserSession
 		err         error
 	)
-
 	if userSession, err = ctx.GetSession(); err != nil {
 		ctx.Logger.WithError(err).Error("Error occurred retrieving user session")
 
@@ -21,9 +24,13 @@ func StateGET(ctx *middlewares.AutheliaCtx) {
 	}
 
 	stateResponse := StateResponse{
-		Username:              userSession.Username,
-		AuthenticationLevel:   userSession.AuthenticationLevel,
-		DefaultRedirectionURL: ctx.Configuration.DefaultRedirectionURL,
+		Username:            userSession.Username,
+		AuthenticationLevel: userSession.AuthenticationLevel(ctx.Configuration.WebAuthn.EnablePasskey2FA),
+		FactorKnowledge:     userSession.AuthenticationMethodRefs.FactorKnowledge(),
+	}
+
+	if uri := ctx.GetDefaultRedirectionURL(); uri != nil {
+		stateResponse.DefaultRedirectionURL = uri.String()
 	}
 
 	if err = ctx.SetJSONBody(stateResponse); err != nil {

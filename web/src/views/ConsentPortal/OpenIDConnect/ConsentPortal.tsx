@@ -1,0 +1,37 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
+import { lazy } from "react";
+
+import { Route, Routes } from "react-router";
+
+import { ConsentDecisionSubRoute, ConsentOpenIDDeviceAuthorizationSubRoute } from "@constants/Routes";
+import { UserInfo } from "@models/UserInfo";
+import { AutheliaState } from "@services/State";
+const OpenIDConnectConsentDecisionFormView = lazy(() => import("@views/ConsentPortal/OpenIDConnect/DecisionFormView"));
+const OpenIDConnectConsentDeviceAuthorizationFormView = lazy(
+    () => import("@views/ConsentPortal/OpenIDConnect/DeviceAuthorizationFormView"),
+);
+
+export interface Props {
+    userInfo?: UserInfo;
+    state: AutheliaState;
+}
+
+function ConsentPortal(props: Props) {
+    return (
+        <Routes>
+            <Route
+                path={ConsentDecisionSubRoute}
+                element={<OpenIDConnectConsentDecisionFormView userInfo={props.userInfo} state={props.state} />}
+            />
+            <Route
+                path={ConsentOpenIDDeviceAuthorizationSubRoute}
+                element={<OpenIDConnectConsentDeviceAuthorizationFormView state={props.state} />}
+            />
+        </Routes>
+    );
+}
+
+export default ConsentPortal;

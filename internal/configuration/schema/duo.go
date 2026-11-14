@@ -1,10 +1,15 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package schema
 
-// DuoAPIConfiguration represents the configuration related to Duo API.
-type DuoAPIConfiguration struct {
-	Disable              bool   `koanf:"disable"`
-	Hostname             string `koanf:"hostname"`
-	IntegrationKey       string `koanf:"integration_key"`
-	SecretKey            string `koanf:"secret_key"`
-	EnableSelfEnrollment bool   `koanf:"enable_self_enrollment"`
+// DuoAPI represents the configuration related to Duo API.
+type DuoAPI struct {
+	Disable              bool   `koanf:"disable" yaml:"disable" toml:"disable" json:"disable" jsonschema:"default=false,title=Disable" jsonschema_description:"Disable the Duo API integration."`
+	Hostname             string `koanf:"hostname" yaml:"hostname,omitempty" toml:"hostname,omitempty" json:"hostname,omitempty" jsonschema:"format=hostname,title=Hostname" jsonschema_description:"The Hostname provided by your Duo API dashboard."`
+	IntegrationKey       string `koanf:"integration_key" yaml:"integration_key,omitempty" toml:"integration_key,omitempty" json:"integration_key,omitempty" jsonschema:"title=Integration Key" jsonschema_description:"The Integration Key provided by your Duo API dashboard."`
+	SecretKey            string `koanf:"secret_key" yaml:"secret_key,omitempty" toml:"secret_key,omitempty" json:"secret_key,omitempty" jsonschema:"title=Secret Key" jsonschema_description:"The Secret Key provided by your Duo API dashboard."`
+	EnableSelfEnrollment bool   `koanf:"enable_self_enrollment" yaml:"enable_self_enrollment" toml:"enable_self_enrollment" json:"enable_self_enrollment" jsonschema:"default=false,title=Enable Self Enrollment" jsonschema_description:"Enable the Self Enrollment flow."`
+	DisableCAPinning     bool   `koanf:"experimental_disable_ca_pinning" yaml:"experimental_disable_ca_pinning" toml:"experimental_disable_ca_pinning" json:"experimental_disable_ca_pinning" jsonschema:"default=false,title=Experimental: Disable CA Pinning" jsonschema_description:"This option is experimental, insecure, not recommended, and may be removed at any time. When true the Duo CA certificate pinning is disabled and the API hostname is verified against the system trust store, allowing a third-party implementation of the Duo Auth API. It can't be used with a Duo hostname."`
 }

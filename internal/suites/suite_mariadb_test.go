@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Authelia
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package suites
 
 import (
@@ -20,8 +24,8 @@ func (s *MariaDBSuite) Test1FAScenario() {
 	suite.Run(s.T(), New1FAScenario())
 }
 
-func (s *MariaDBSuite) Test2FAScenario() {
-	suite.Run(s.T(), New2FAScenario())
+func (s *MariaDBSuite) Test2FATOTPScenario() {
+	suite.Run(s.T(), New2FATOTPScenario())
 }
 
 func TestMariaDBSuite(t *testing.T) {
